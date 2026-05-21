@@ -7,7 +7,6 @@
   "scripts": {
     "dev": "electron .",
     "build": "tsc && electron-builder --win --x64",
-    "build": "electron-builder --win --x64",
     "pack": "electron-builder --dir"
   },
   "dependencies": {
@@ -29,26 +28,17 @@
     "appId": "com.printserver.client",
     "productName": "PrintServer Client",
     "win": {
-      "target": "nsis",
-      "icon": "build/icon.ico"
+      "target": "nsis"
     },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "installerIcon": "build/icon.ico",
       "createStartMenuShortcut": true,
-      "requestedExecutionLevel": "requireAdministrator"
+      "perMachine": true
     },
     "files": [
       "dist/**/*",
       "build/**/*"
-    ],
-    "extraResources": [
-      {
-        "from": "virtual-printer/",
-        "to": "virtual-printer/",
-        "filter": ["**/*"]
-      }
     ]
   }
 }
