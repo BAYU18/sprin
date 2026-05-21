@@ -1,0 +1,108 @@
+import axios from 'axios';
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL || '';
+
+const api = axios.create({
+  baseURL: API_URL || undefined,
+  timeout: 15000,
+  headers: {
+    'Content-Type': 'application/json'
+  }
+});
+
+api.interceptors.request.use((config) => {
+  if (typeof window !== 'undefined') {
+    const token = localStorage.getItem('token');
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+  }
+  return config;
+});
+
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response?.status === 401 || error.response?.status === 403) {
+      if (typeof window !== 'undefined') {
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+        window.location.href = '/login';
+      }
+    }
+    return Promise.reject(error);
+  }
+);
+
+export const auth = {
+  login: (username: string, password: string) =>
+    api.post('/api/auth/login', { username, password }),
+  register: (data: any) => api.post('/api/auth/register', data),
+  refresh: (refreshToken: string) =>
+    api.post('/api/auth/refresh', { refreshToken }),
+};
+
+export const printers = {
+  list: () => api.get('/api/printers'),
+  get: (id: number) => api.get(`/api/printers/${id}`),
+  create: (data: any) => api.post('/api/printers', data),
+  update: (id: number, data: any) => api.put(`/api/printers/${id}`, data),
+  delete: (id: number) => api.delete(`/api/printers/${id}`),
+  status: (id: number) => api.get(`/api/printers/${id}/status`),
+  jobs: (id: number, params?: any) => api.get(`/api/printers/${id}/jobs`, { params }),
+};
+
+export const jobs = {
+  list: (params?: any) => api.get('/api/jobs', { params }),
+  get: (jobId: string) => api.get(`/api/jobs/${jobId}`),
+  submit: (data: any) => api.post('/api/jobs/submit', data),
+  cancel: (jobId: string) => api.post(`/api/jobs/${jobId}/cancel`),
+  retry: (jobId: string) => api.post(`/api/jobs/${jobId}/retry`),
+  stats: {
+    today: () => api.get('/api/jobs/stats/today'),
+    week: () => api.get('/api/jobs/stats/week'),
+  },
+};
+
+export const clients = {
+  list: () => api.get('/api/clients'),
+  get: (id: number) => api.get(`/api/clients/${id}`),
+  register: (data: any) => api.post('/api/clients/register', data),
+  heartbeat: (id: number, data: any) => api.post(`/api/clients/${id}/heartbeat`, data),
+  delete: (id: number) => api.delete(`/api/clients/${id}`),
+  onlineCount: () => api.get('/api/clients/online/count'),
+};
+
+export const users = {
+  list: () => api.get('/api/users'),
+  get: (id: number) => api.get(`/api/users/${id}`),
+  create: (data: any) => api.post('/api/users', data),
+  update: (id: number, data: any) => api.put(`/api/users/${id}`, data),
+  delete: (id: number) => api.delete(`/api/users/${id}`),
+  quota: (id: number) => api.get(`/api/users/${id}/quota`),
+};
+
+export const alerts = {
+  list: (params?: any) => api.get('/api/alerts', { params }),
+  unresolved: () => api.get('/api/alerts/unresolved'),
+  resolve: (id: number) => api.put(`/api/alerts/${id}/resolve`),
+  resolveAll: () => api.put('/api/alerts/resolve-all'),
+  delete: (id: number) => api.delete(`/api/alerts/${id}`),
+};
+
+export const analytics = {
+  overview: () => api.get('/api/analytics/overview'),
+  volume: (days?: number) => api.get('/api/analytics/volume', { params: { days } }),
+  printersUsage: () => api.get('/api/analytics/printers/usage'),
+  topUsers: (limit?: number) => api.get('/api/analytics/users/top', { params: { limit } }),
+  failures: () => api.get('/api/analytics/failures'),
+  departments: () => api.get('/api/analytics/departments'),
+};
+
+export const settings = {
+  get: () => api.get('/api/settings'),
+  update: (data: any) => api.put('/api/settings', data),
+  channels: () => api.get('/api/settings/notifications/channels'),
+};
+
+export default api;

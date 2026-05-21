@@ -1,0 +1,51 @@
+{
+  "name": "@printserver/client",
+  "version": "1.0.0",
+  "description": "PrintServer Client Agent",
+  "main": "dist/main.js",
+  "scripts": {
+    "dev": "electron .",
+    "build": "electron-builder --win --x64",
+    "pack": "electron-builder --dir"
+  },
+  "dependencies": {
+    "electron": "^29.1.0",
+    "electron-store": "^8.1.0",
+    "socket.io-client": "^4.7.4",
+    "axios": "^1.6.8",
+    "chokidar": "^3.6.0",
+    "uuid": "^9.0.1",
+    "electron-log": "^5.1.1",
+    "form-data": "^4.0.0",
+    "tmp": "^0.2.3"
+  },
+  "devDependencies": {
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.printserver.client",
+    "productName": "PrintServer Client",
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "installerIcon": "build/icon.ico",
+      "createStartMenuShortcut": true,
+      "requestedExecutionLevel": "requireAdministrator"
+    },
+    "files": [
+      "dist/**/*",
+      "build/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "virtual-printer/",
+        "to": "virtual-printer/",
+        "filter": ["**/*"]
+      }
+    ]
+  }
+}

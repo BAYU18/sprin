@@ -1,0 +1,41 @@
+# Ignore node_modules dan file development
+node_modules/
+dist/
+npm-debug.log*
+
+# Ignore source files di builder stage
+src/
+
+# Ignore environment files
+.env
+.env.*
+!.env.example
+
+# Ignore IDE dan editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Ignore git
+.git/
+.gitignore
+
+# Ignore logs
+logs/
+*.log
+
+# Ignore OS files
+.DS_Store
+Thumbs.db
+
+# Ignore test files
+**/*.test.ts
+**/*.spec.ts
+coverage/
+
+# Ignore temporary files
+tmp/
+temp/
+*.tmp

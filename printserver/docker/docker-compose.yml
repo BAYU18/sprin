@@ -1,0 +1,126 @@
+# ============================================
+# PrintServer Pro - Docker Compose
+# ============================================
+# Servis: PostgreSQL, Redis, API, Dashboard
+
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: printserver-postgres
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - printserver-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: printserver-redis
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - printserver-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  api:
+    build:
+      context: ../apps/server
+      dockerfile: Dockerfile
+    container_name: printserver-api
+    environment:
+      NODE_ENV: production
+      IS_NODE: "false"
+      IS_CENTRAL: "true"
+      PORT: 3000
+      IPP_PORT: "631"
+      SERVER_NAME: ${SERVER_NAME:-PrintServer}
+      SERVER_IP: ${SERVER_IP:-localhost}
+      DATABASE_URL: postgres://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_NAME}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      JWT_SECRET: ${JWT_SECRET}
+      CLIENT_SECRET: ${CLIENT_SECRET}
+      NODE_SECRET: ${NODE_SECRET}
+      LOG_LEVEL: info
+      AUTO_HEAL: "true"
+      CHECK_INTERVAL: "30"
+      HEAL_DELAY: "60"
+      JOB_RETRY_ATTEMPTS: "3"
+      JOB_RETRY_DELAY: "5000"
+    ports:
+      - "3000:3000"
+      - "631:631"
+      - "631:631/udp"
+    volumes:
+      - api_logs:/app/logs
+    networks:
+      - printserver-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+
+  dashboard:
+    build:
+      context: ../apps/dashboard
+      dockerfile: Dockerfile
+      args:
+        - API_PUBLIC_URL=${API_PUBLIC_URL}
+        - WS_PUBLIC_URL=${WS_PUBLIC_URL}
+    container_name: printserver-dashboard
+    environment:
+      - NODE_ENV=production
+    ports:
+      - "3001:3000"
+    volumes:
+      - nextjs_cache:/app/.next/cache
+    networks:
+      - printserver-net
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+networks:
+  printserver-net:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  api_logs:
+  nextjs_cache:

@@ -1,0 +1,53 @@
+{
+  "name": "@printserver/server",
+  "version": "1.0.0",
+  "description": "PrintServer Centralized Print Server",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "db:migrate": "tsx src/db/migrate.ts",
+    "db:seed": "tsx src/db/seed.ts",
+    "lint": "eslint src --ext .ts"
+  },
+  "dependencies": {
+    "fastify": "^4.26.0",
+    "@fastify/cors": "^8.5.0",
+    "@fastify/helmet": "^11.1.1",
+    "@fastify/jwt": "^8.0.0",
+    "@fastify/rate-limit": "^9.1.0",
+    "@fastify/websocket": "^9.0.0",
+    "@fastify/static": "^7.0.0",
+    "socket.io": "^4.7.4",
+    "bullmq": "^5.4.0",
+    "ioredis": "^5.3.2",
+    "pg": "^8.11.3",
+    "knex": "^3.1.0",
+    "bcryptjs": "^2.4.3",
+    "pino": "^8.19.0",
+    "pino-pretty": "^10.3.1",
+    "qrcode": "^1.5.3",
+    "zod": "^3.22.4",
+    "uuid": "^9.0.1",
+    "dotenv": "^16.4.5",
+    "prom-client": "^15.1.0",
+    "bonjour-service": "^1.2.1",
+    "ipp": "^2.2.7",
+    "multer": "^1.4.5-lts.1",
+    "form-data": "^4.0.0",
+    "axios": "^1.6.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/pg": "^8.11.0",
+    "@types/bcryptjs": "^2.4.6",
+    "@types/uuid": "^9.0.8",
+    "@types/qrcode": "^1.5.5",
+    "typescript": "^5.3.3",
+    "tsx": "^4.7.0",
+    "@typescript-eslint/eslint-plugin": "^6.20.0",
+    "@typescript-eslint/parser": "^6.20.0",
+    "eslint": "^8.56.0"
+  }
+}
