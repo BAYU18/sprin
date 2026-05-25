@@ -30,13 +30,9 @@ jobs:
         working-directory: printserver/apps/client
         run: npm install
 
-      - name: Build TypeScript
-        working-directory: printserver/apps/client
-        run: npx tsc
-
       - name: Build Electron App
         working-directory: printserver/apps/client
-        run: npx electron-builder --win --x64 --dir
+        run: npm run build
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
