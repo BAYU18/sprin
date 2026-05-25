@@ -4,11 +4,11 @@ on:
   push:
     branches: [main]
     paths:
-      - 'apps/client/**'
+      - 'printserver/apps/client/**'
   pull_request:
     branches: [main]
     paths:
-      - 'apps/client/**'
+      - 'printserver/apps/client/**'
   workflow_dispatch:
 
 jobs:
@@ -24,18 +24,18 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
-          cache-dependency-path: apps/client/package-lock.json
+          cache-dependency-path: printserver/apps/client/package-lock.json
 
       - name: Install Dependencies
-        working-directory: apps/client
+        working-directory: printserver/apps/client
         run: npm ci
 
       - name: Build TypeScript
-        working-directory: apps/client
+        working-directory: printserver/apps/client
         run: npm run build --if-present
 
       - name: Build Electron App
-        working-directory: apps/client
+        working-directory: printserver/apps/client
         run: npm run build
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -44,14 +44,14 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: printserver-client-windows
-          path: apps/client/dist/
+          path: printserver/apps/client/dist/
           retention-days: 30
 
       - name: Create Release
         if: github.ref == 'refs/heads/main' && github.event_name == 'push'
         uses: softprops/action-gh-release@v1
         with:
-          files: apps/client/dist/**/*.exe
+          files: printserver/apps/client/dist/**/*.exe
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
