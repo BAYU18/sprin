@@ -30,13 +30,15 @@
     "appId": "com.printserver.client",
     "productName": "PrintServer Client",
     "win": {
-      "target": "nsis"
+      "target": [
+        {
+          "target": "dir",
+          "arch": ["x64"]
+        }
+      ]
     },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
-      "createStartMenuShortcut": true,
-      "perMachine": true
+    "directories": {
+      "output": "dist"
     },
     "files": [
       "dist/**/*",
