@@ -38,3 +38,6 @@ npm run build  # Build for Windows
 Windows client build: GitHub Actions
 
 # Build v1.0.1
+
+## Build Status
+v1.0.1 - GitHub Actions CI/CD
