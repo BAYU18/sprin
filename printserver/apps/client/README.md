@@ -34,3 +34,5 @@ npm run build  # Build for Windows
 
 - Server URL: `http://your-server:3000`
 - Node Secret: Get from Settings page in dashboard
+## Build Status
+Windows client build: GitHub Actions
