@@ -1,4 +1,5 @@
 import { Request, Response, FastifyInstance } from 'fastify';
+import bcrypt from 'bcryptjs';
 import { logger } from '../utils/logger.js';
 import { z } from 'zod';
 
@@ -27,7 +28,6 @@ export async function setupAuth(fastify: FastifyInstance) {
                 return reply.status(401).send({ error: 'Invalid credentials' });
             }
 
-            const bcrypt = await import('bcryptjs');
             const validPassword = await bcrypt.compare(password, user.password_hash);
 
             if (!validPassword) {
@@ -63,8 +63,9 @@ export async function setupAuth(fastify: FastifyInstance) {
                 }
             };
         } catch (error) {
-            logger.error('[Auth] Login error:', error);
-            return reply.status(500).send({ error: 'Login failed' });
+            logger.error('[Auth] Login error:', error?.message || error, error?.stack);
+            console.error('[Auth] Full error:', JSON.stringify(error, Object.getOwnPropertyNames(error)));
+            return reply.status(500).send({ error: 'Login failed', details: error?.message });
         }
     });
 

@@ -56,7 +56,7 @@ export async function setupAnalyticsRoutes(fastify: FastifyInstance) {
         return volumeData;
     });
 
-    fastfix.get('/printers/usage', async (request, reply) => {
+    fastify.get('/printers/usage', async (request, reply) => {
         const topPrinters = await fastify.knex('print_jobs')
             .join('printers', 'print_jobs.printer_id', 'printers.id')
             .where('print_jobs.created_at', '>=', new Date(Date.now() - 30 * 24 * 60 * 60 * 1000))

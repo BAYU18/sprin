@@ -202,8 +202,10 @@ export async function setupDiscoveryRoutes(fastify: FastifyInstance) {
 
     /**
      * POST /api/nodes/register
-     * Windows Server mendaftarkan dirinya saat startup
+     * Windows Node mendaftarkan dirinya ke Central Server
+     * NOTE: Handled by nodes.ts route - commenting to avoid duplicate
      */
+    /*
     fastify.post('/nodes/register', async (request: FastifyRequest, reply: FastifyReply) => {
         try {
             const body = registerNodeSchema.parse(request.body);
@@ -316,11 +318,14 @@ export async function setupDiscoveryRoutes(fastify: FastifyInstance) {
             return reply.status(400).send({ error: (error as Error).message });
         }
     });
+    */
 
     /**
      * POST /api/nodes/:id/heartbeat
      * Windows Server mengirim heartbeat secara periodik
+     * NOTE: Handled by nodes.ts route - commenting to avoid duplicate
      */
+    /*
     fastify.post('/nodes/:id/heartbeat', async (request: FastifyRequest, reply: FastifyReply) => {
         try {
             const { id } = request.params as { id: string };
@@ -375,11 +380,14 @@ export async function setupDiscoveryRoutes(fastify: FastifyInstance) {
             return reply.status(400).send({ error: (error as Error).message });
         }
     });
+    */
 
     /**
      * DELETE /api/nodes/:id
      * Hapus node (dari Dashboard admin)
+     * NOTE: Handled by nodes.ts route - commenting to avoid duplicate
      */
+    /*
     fastify.delete('/nodes/:id', async (request: FastifyRequest, reply: FastifyReply) => {
         try {
             const { id } = request.params as { id: string };
@@ -400,6 +408,7 @@ export async function setupDiscoveryRoutes(fastify: FastifyInstance) {
             return reply.status(500).send({ error: 'Failed to delete node' });
         }
     });
+    */
 
     /**
      * GET /api/discovery/printer-groups

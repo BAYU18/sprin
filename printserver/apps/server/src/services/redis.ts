@@ -6,7 +6,6 @@ let redis: Redis | null = null;
 export async function setupRedis(fastify: any) {
     redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {
         maxRetriesPerRequest: 3,
-        retryDelayOnFailover: 100,
         lazyConnect: true,
         enableReadyCheck: true,
         connectTimeout: 10000

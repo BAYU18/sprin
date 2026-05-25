@@ -12,7 +12,6 @@ import {
   Check,
   ExternalLink,
   QrCode,
-  Windows,
   Apple,
   Chrome,
   Shield,
@@ -42,7 +41,7 @@ interface ServerInfo {
 const deviceInstructions = [
   {
     platform: 'Windows',
-    icon: Windows,
+    icon: Monitor,
     color: 'bg-blue-500',
     instructions: [
       'Buka Settings → Printers & scanners',

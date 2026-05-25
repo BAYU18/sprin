@@ -1,8 +1,10 @@
-import type { Metadata } from 'next';
 import './globals.css';
+import { Inter } from 'next/font/google';
 
-export const metadata: Metadata = {
-  title: 'PrintServer Pro',
+const inter = Inter({ subsets: ['latin'] });
+
+export const metadata = {
+  title: 'PrintServer Pro – Enterprise Edition',
   description: 'Enterprise Centralized Print Management System',
 };
 
@@ -13,7 +15,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className="min-h-screen bg-slate-900">{children}</body>
+      <body className={inter.className}>{children}</body>
     </html>
   );
 }

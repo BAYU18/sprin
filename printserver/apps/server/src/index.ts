@@ -72,7 +72,9 @@ async function buildServer() {
     await setupMetrics(fastify);
 
     const printRouter = new PrintRouter(fastify);
+    logger.info('About to initialize PrintRouter...');
     await printRouter.initialize();
+    logger.info('PrintRouter initialized');
     fastify.decorate('printRouter', printRouter);
 
     if (IS_CENTRAL) {
@@ -139,7 +141,24 @@ async function start() {
         process.on('SIGINT', () => shutdown('SIGINT'));
 
     } catch (error) {
+        console.error('RAW ERROR:', error);
+        console.error('Type:', typeof error);
+        console.error('Keys:', Object.keys(error));
+        console.error('Constructor:', error?.constructor?.name);
+        
         logger.error('Failed to start server:', error);
+        if (error instanceof Error) {
+            logger.error('Stack:', error.stack);
+            if (error.cause) {
+                logger.error('Cause:', error.cause);
+            }
+        }
+        if (typeof error === 'string') {
+            logger.error('Error string:', error);
+        }
+        if (error && typeof error === 'object') {
+            logger.error('Error object:', JSON.stringify(error, Object.getOwnPropertyNames(error)));
+        }
         process.exit(1);
     }
 }

@@ -38,8 +38,22 @@ export class PrintRouter {
     async initialize(): Promise<void> {
         logger.info('[PrintRouter] Initializing...');
 
-        await this.loadPrinters();
-        await this.setupFailoverMap();
+        try {
+            await this.loadPrinters();
+            logger.info('[PrintRouter] loadPrinters done');
+        } catch(e) {
+            logger.error('[PrintRouter] loadPrinters error:', e);
+            throw e;
+        }
+
+        try {
+            await this.setupFailoverMap();
+            logger.info('[PrintRouter] setupFailoverMap done');
+        } catch(e) {
+            logger.error('[PrintRouter] setupFailoverMap error:', e);
+            throw e;
+        }
+
         this.startHealthCheck();
 
         logger.info('[PrintRouter] Initialization complete');

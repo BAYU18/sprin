@@ -40,14 +40,4 @@ export async function setupRoutes(fastify: FastifyInstance) {
     await fastify.register(setupSetupRoutes);
     await fastify.register(setupIPPRoutes);
     fastify.log.info('[Routes] Setup and IPP routes registered');
-
-    fastify.post('/api/jobs/submit', async (request, reply) => {
-        const { centralRouter, printRouter } = fastify;
-        if (centralRouter) {
-            const result = await centralRouter.submitJob(request.body);
-            return result;
-        }
-        const result = await printRouter.submitJob(request.body);
-        return result;
-    });
 }

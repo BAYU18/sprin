@@ -1,5 +1,6 @@
-import { Knex } from 'knex';
-import { Knex as KnexType } from 'knex';
+import Knex from 'knex';
+import type { Knex as KnexType } from 'knex';
+import { logger } from '../utils/logger.js';
 
 let knex: KnexType | null = null;
 
@@ -78,6 +79,14 @@ async function runMigrations(knex: KnexType) {
             table.timestamps(true, true);
         });
 
+        await knex.schema.createTable('printer_groups', (table) => {
+            table.increments('id').primary();
+            table.string('name').unique().notNullable();
+            table.string('description');
+            table.jsonb('settings');
+            table.timestamps(true, true);
+        });
+
         await knex.schema.createTable('printers', (table) => {
             table.increments('id').primary();
             table.string('name').notNullable();
@@ -92,14 +101,6 @@ async function runMigrations(knex: KnexType) {
             table.jsonb('config');
             table.integer('group_id').unsigned().references('id').inTable('printer_groups');
             table.integer('priority').defaultTo(0);
-            table.timestamps(true, true);
-        });
-
-        await knex.schema.createTable('printer_groups', (table) => {
-            table.increments('id').primary();
-            table.string('name').unique().notNullable();
-            table.string('description');
-            table.jsonb('settings');
             table.timestamps(true, true);
         });
 

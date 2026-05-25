@@ -1,36 +1,31 @@
 /** @type {import('next').NextConfig} */
 
 const nextConfig = {
-  # Output standalone untuk Docker multi-stage build
+  // Output standalone untuk Docker multi-stage build
   output: 'standalone',
 
-  # Transpile packages
+  // Transpile packages
   transpilePackages: [],
 
-  # Environment variables untuk client-side
+  // Environment variables untuk client-side
   env: {
     NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL,
     NEXT_PUBLIC_WS_URL: process.env.NEXT_PUBLIC_WS_URL,
   },
 
-  # Rewrites untuk proxy API requests ke backend
+  // Rewrites untuk proxy API requests ke backend
   async rewrites() {
     const apiUrl = process.env.API_PUBLIC_URL || 'http://localhost:3000';
-    const wsUrl = process.env.WS_PUBLIC_URL || 'ws://localhost:3000';
 
     return [
       {
         source: '/api/:path*',
         destination: `${apiUrl}/api/:path*`,
       },
-      {
-        source: '/socket.io/:path*',
-        destination: `${wsUrl}/socket.io/:path*`,
-      },
     ];
   },
 
-  # Security headers
+  // Security headers
   async headers() {
     return [
       {
@@ -53,9 +48,9 @@ const nextConfig = {
     ];
   },
 
-  # Experimental features
+  // Experimental features
   experimental: {
-    # Enable server actions
+    // Enable server actions
     serverActions: {
       allowedOrigins: ['localhost:3001'],
     },
