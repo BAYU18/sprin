@@ -24,7 +24,7 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
-          cache-dependency-path: apps/client/package-lock.json
+          cache-dependency-path: 'printserver/apps/client/package-lock.json'
 
       - name: Install Dependencies
         working-directory: apps/client
