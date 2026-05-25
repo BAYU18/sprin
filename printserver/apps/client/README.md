@@ -36,3 +36,5 @@ npm run build  # Build for Windows
 - Node Secret: Get from Settings page in dashboard
 ## Build Status
 Windows client build: GitHub Actions
+
+# Build v1.0.1
