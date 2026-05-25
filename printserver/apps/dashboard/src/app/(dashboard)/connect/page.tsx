@@ -480,6 +480,70 @@ export default function ConnectPage() {
         </div>
       </div>
 
+      <div className="card">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="p-2 bg-orange-500/20 rounded-lg">
+            <Monitor className="w-6 h-6 text-orange-500" />
+          </div>
+          <div>
+            <h2 className="text-lg font-semibold">Windows Node Agent</h2>
+            <p className="text-slate-400 text-sm">Download & install agent di PC Windows</p>
+          </div>
+        </div>
+
+        <div className="bg-slate-700/50 rounded-lg p-4 border border-slate-600 mb-4">
+          <div className="flex items-center justify-between flex-wrap gap-4">
+            <div>
+              <h3 className="font-medium">PrintServer Client Agent</h3>
+              <p className="text-sm text-slate-400 mt-1">File .exe untuk Windows 64-bit</p>
+              <p className="text-xs text-slate-500 mt-1">Versi: 1.0.0 | Ukuran: ~120 MB</p>
+            </div>
+            <div className="flex flex-col gap-2">
+              <a
+                href="https://github.com/printserver/printserver/releases/latest/download/PrintServer-Client-Setup.exe"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="btn-primary flex items-center gap-2"
+              >
+                <ExternalLink className="w-4 h-4" />
+                Download .exe
+              </a>
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-4 mb-4">
+          <div className="flex items-start gap-3">
+            <Info className="w-5 h-5 text-yellow-500 mt-0.5 flex-shrink-0" />
+            <div>
+              <p className="text-yellow-200 text-sm font-medium">Install di PC Windows:</p>
+              <ol className="text-yellow-100/70 text-sm mt-2 space-y-1">
+                <li>1. Download file .exe di atas</li>
+                <li>2. Jalankan installer sebagai Administrator</li>
+                <li>3. Masukkan Server URL: <code className="text-xs bg-slate-800 px-1 py-0.5 rounded">http://192.168.170.58:3000</code></li>
+                <li>4. Masukkan Node Secret (dari Settings page)</li>
+                <li>5. Klik Connect - agent akan muncul di dashboard</li>
+              </ol>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-4 text-sm text-slate-400 flex-wrap">
+          <div className="flex items-center gap-2">
+            <div className="w-2 h-2 rounded-full bg-green-500"></div>
+            <span>Windows 10/11 (64-bit)</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-2 h-2 rounded-full bg-green-500"></div>
+            <span>.NET 6.0+</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-2 h-2 rounded-full bg-green-500"></div>
+            <span>Admin rights required</span>
+          </div>
+        </div>
+      </div>
+
       <div className="card bg-gradient-to-r from-blue-900/30 to-purple-900/30 border border-blue-500/30">
         <div className="flex items-center gap-4">
           <div className="p-3 bg-blue-500/20 rounded-full">
