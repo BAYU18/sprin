@@ -32,7 +32,9 @@ jobs:
 
       - name: Build Electron App
         working-directory: printserver/apps/client
-        run: npm run build
+        run: |
+          npx tsc --skipLibCheck --esModuleInterop
+          npx electron-builder --win --x64 --dir
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

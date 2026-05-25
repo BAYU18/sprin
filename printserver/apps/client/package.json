@@ -6,7 +6,7 @@
   "main": "dist/main.js",
   "scripts": {
     "dev": "electron .",
-    "build": "npx tsc --skipLibCheck --esModuleInterop && npx electron-builder --win --x64",
+    "build": "npx tsc --skipLibCheck --esModuleInterop; npx electron-builder --win --x64 --dir",
     "pack": "electron-builder --dir"
   },
   "dependencies": {
