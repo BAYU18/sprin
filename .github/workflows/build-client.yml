@@ -4,11 +4,11 @@ on:
   push:
     branches: [main]
     paths:
-      - 'apps/client/**'
+      - 'printserver/apps/client/**'
   pull_request:
     branches: [main]
     paths:
-      - 'apps/client/**'
+      - 'printserver/apps/client/**'
   workflow_dispatch:
 
 jobs:
