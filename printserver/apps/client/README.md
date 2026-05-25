@@ -41,3 +41,5 @@ Windows client build: GitHub Actions
 
 ## Build Status
 v1.0.1 - GitHub Actions CI/CD
+
+Build: v1.0.2
