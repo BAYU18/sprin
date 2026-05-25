@@ -32,17 +32,11 @@ jobs:
 
       - name: Build TypeScript
         working-directory: printserver/apps/client
-        run: |
-          echo "=== Checking TypeScript ==="
-          npx tsc --version
-          npx tsc --noEmit --skipLibCheck 2>&1 || echo "TypeScript check completed with warnings"
+        run: npx tsc
 
       - name: Build Electron App
         working-directory: printserver/apps/client
-        run: |
-          echo "=== Building Electron App ==="
-          npx electron-builder --win --x64 --dir
-          ls -la dist/ 2>&1 || echo "Checking dist folder"
+        run: npx electron-builder --win --x64 --dir
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
