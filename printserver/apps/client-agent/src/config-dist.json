@@ -1,0 +1,14 @@
+{
+  "serverUrl": "http://192.168.170.58:3000",
+  "checkInterval": 10000,
+  "spoolDirs": [
+    "C:\\Windows\\System32\\spool\\printers",
+    "C:\\Users\\*\\AppData\\Local\\Temp"
+  ],
+  "autoStart": true,
+  "reconnectDelay": 5000,
+  "maxRetries": 10,
+  "logLevel": "info",
+  "printerRefreshInterval": 60000,
+  "watchExtensions": [".pdf", ".ps", ".prn", ".tif", ".tiff", ".png", ".jpg", ".jpeg"]
+}

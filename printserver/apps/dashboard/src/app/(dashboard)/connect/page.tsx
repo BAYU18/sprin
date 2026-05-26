@@ -496,14 +496,13 @@ export default function ConnectPage() {
             <div>
               <h3 className="font-medium">PrintServer Client Agent</h3>
               <p className="text-sm text-slate-400 mt-1">File .exe untuk Windows 64-bit</p>
-              <p className="text-xs text-slate-500 mt-1">Versi: 1.0.0 | Ukuran: ~120 MB</p>
+              <p className="text-xs text-slate-500 mt-1">Versi: 1.0.0 | Ukuran: ~38 MB</p>
             </div>
             <div className="flex flex-col gap-2">
               <a
-                href="https://github.com/printserver/printserver/releases/latest/download/PrintServer-Client-Setup.exe"
-                target="_blank"
-                rel="noopener noreferrer"
+                href="/downloads/agent"
                 className="btn-primary flex items-center gap-2"
+                download="PrintServer-Agent-1.0.0.exe"
               >
                 <ExternalLink className="w-4 h-4" />
                 Download .exe
@@ -535,11 +534,11 @@ export default function ConnectPage() {
           </div>
           <div className="flex items-center gap-2">
             <div className="w-2 h-2 rounded-full bg-green-500"></div>
-            <span>.NET 6.0+</span>
+            <span>Node.js Runtime (included)</span>
           </div>
           <div className="flex items-center gap-2">
             <div className="w-2 h-2 rounded-full bg-green-500"></div>
-            <span>Admin rights required</span>
+            <span>Admin rights for service install</span>
           </div>
         </div>
       </div>

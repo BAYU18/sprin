@@ -22,6 +22,11 @@ const nextConfig = {
         source: '/api/:path*',
         destination: `${apiUrl}/api/:path*`,
       },
+      {
+        // Proxy downloads ke API server (karena Next.js tidak bisa serve file binary besar)
+        source: '/downloads/:path*',
+        destination: `${apiUrl}/downloads/:path*`,
+      },
     ];
   },
 

@@ -12,6 +12,7 @@ import { setupNodesRoutes } from './nodes.js';
 import { setupDiscoveryRoutes } from './discovery.js';
 import { setupSetupRoutes } from './setup.js';
 import { setupIPPRoutes } from './ipp.js';
+import { setupDownloadsRoutes } from './downloads.js';
 
 export async function setupRoutes(fastify: FastifyInstance) {
     await fastify.register(setupAuth);
@@ -39,5 +40,6 @@ export async function setupRoutes(fastify: FastifyInstance) {
 
     await fastify.register(setupSetupRoutes);
     await fastify.register(setupIPPRoutes);
-    fastify.log.info('[Routes] Setup and IPP routes registered');
+    await fastify.register(setupDownloadsRoutes);
+    fastify.log.info('[Routes] Setup, IPP and Downloads routes registered');
 }

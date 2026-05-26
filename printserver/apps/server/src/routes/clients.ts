@@ -2,12 +2,23 @@ import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
 const clientSchema = z.object({
-    hostname: z.string(),
+    hostname: z.string().optional(),
+    name: z.string().optional(),
     ip_address: z.string().optional(),
     mac_address: z.string().optional(),
     os_version: z.string().optional(),
     client_version: z.string().optional(),
-    secret_key: z.string().optional()
+    secret_key: z.string().optional(),
+    secretKey: z.string().optional(),
+    printers: z.array(z.string()).optional(),
+    capabilities: z.object({}).passthrough().optional(),
+    platform: z.string().optional(),
+    arch: z.string().optional(),
+    memory: z.number().optional(),
+    cpus: z.number().optional(),
+    version: z.string().optional()
+}).refine(data => data.hostname || data.name, {
+    message: "Either hostname or name is required"
 });
 
 export async function setupClientsRoutes(fastify: FastifyInstance) {
@@ -43,15 +54,28 @@ export async function setupClientsRoutes(fastify: FastifyInstance) {
 
     fastify.post('/register', async (request, reply) => {
         try {
-            const body = clientSchema.parse(request.body);
-            const { secret_key } = request.body as { secret_key?: string };
+            const raw = request.body as any;
+            // Normalize field names (support both old and new agent formats)
+            const hostname = raw.hostname || raw.name || 'unknown';
+            const clientVersion = raw.client_version || raw.version || '1.0.0';
+            const secretKey = raw.secret_key || raw.secretKey;
+            const ipAddress = raw.ip_address || null;
+            const osVersion = raw.os_version || raw.platform || null;
 
-            if (secret_key && secret_key !== process.env.CLIENT_SECRET) {
+            const insertData = {
+                hostname,
+                ip_address: ipAddress,
+                mac_address: raw.mac_address || null,
+                os_version: osVersion,
+                client_version: clientVersion,
+            };
+
+            if (secretKey && secretKey !== process.env.CLIENT_SECRET) {
                 return reply.status(401).send({ error: 'Invalid secret key' });
             }
 
             const existing = await fastify.knex('clients')
-                .where('hostname', body.hostname)
+                .where('hostname', hostname)
                 .first();
 
             let client;
@@ -59,9 +83,9 @@ export async function setupClientsRoutes(fastify: FastifyInstance) {
                 [client] = await fastify.knex('clients')
                     .where({ id: existing.id })
                     .update({
-                        ip_address: body.ip_address,
-                        os_version: body.os_version,
-                        client_version: body.client_version,
+                        ip_address: ipAddress,
+                        os_version: osVersion,
+                        client_version: clientVersion,
                         is_online: true,
                         last_seen: new Date()
                     })
@@ -72,7 +96,7 @@ export async function setupClientsRoutes(fastify: FastifyInstance) {
 
                 [client] = await fastify.knex('clients')
                     .insert({
-                        ...body,
+                        ...insertData,
                         secret_key: secret,
                         is_online: true,
                         last_seen: new Date()

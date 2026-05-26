@@ -142,7 +142,7 @@ function StatCard({
   value: number;
   total?: number;
   label: string;
-  subtext: string;
+  subtext: React.ReactNode;
 }) {
   const animated = useCountUp(value);
   const pct = total && total > 0 ? (value / total) * 100 : 0;
@@ -368,8 +368,8 @@ function NetworkTopology({ printers: printerList, clients: clientList }: { print
 // ─── Main Dashboard ────────────────────────────────────────────────────────────
 
 export default function DashboardPage() {
-  const [printers, setPrinters] = useState<any[]>([]);
-  const [clients, setClients] = useState<any[]>([]);
+  const [printerList, setPrinterList] = useState<any[]>([]);
+  const [clientList, setClientList] = useState<any[]>([]);
   const [todayJobs, setTodayJobs] = useState<any[]>([]);
   const [volumeData, setVolumeData] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -383,8 +383,8 @@ export default function DashboardPage() {
         fetch('/api/stats?range=7d').catch(() => ({ ok: false, json: () => ({ jobs: [] }) })),
       ]);
 
-      setPrinters(printersRes.data || []);
-      setClients(clientsRes.data || []);
+      setPrinterList(printersRes.data || []);
+      setClientList(clientsRes.data || []);
 
       const todayData = todayRes.data || {};
       const today = new Date().toDateString();
@@ -418,10 +418,10 @@ export default function DashboardPage() {
   }, []);
 
   // ── Derived stats ──────────────────────────────────────────────────────────
-  const onlinePrinters = printers.filter((p: any) => p.status === 'online').length;
-  const totalPrinters = printers.length;
-  const activeClients = clients.filter((c: any) => c.active || c.online).length;
-  const totalClients = clients.length;
+  const onlinePrinters = printerList.filter((p: any) => p.status === 'online').length;
+  const totalPrinters = printerList.length;
+  const activeClients = clientList.filter((c: any) => c.active || c.online).length;
+  const totalClients = clientList.length;
 
   const today = new Date().toDateString();
   const todayFiltered = todayJobs.filter((j: any) => {
@@ -530,8 +530,66 @@ export default function DashboardPage() {
         />
       </div>
 
+      {/* Download Agent Card */}
+      <div style={{
+        background: 'linear-gradient(135deg, #0a1628 0%, #1a2d4a 100%)',
+        border: '1px solid rgba(0,212,255,0.3)',
+        borderRadius: 12,
+        padding: '24px 32px',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        flexWrap: 'wrap',
+        gap: 16
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+          <div style={{
+            background: 'rgba(0,212,255,0.1)',
+            border: '1px solid rgba(0,212,255,0.3)',
+            borderRadius: 10,
+            padding: 12,
+            display: 'flex'
+          }}>
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#00d4ff" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="7 10 12 15 17 10" />
+              <line x1="12" y1="15" x2="12" y2="3" />
+            </svg>
+          </div>
+          <div>
+            <div style={{ fontFamily: 'Share Tech Mono', fontSize: 14, color: '#00d4ff', fontWeight: 600 }}>DOWNLOAD AGENT</div>
+            <div style={{ fontFamily: 'Rajdhani', fontSize: 12, color: 'rgba(255,255,255,0.5)', marginTop: 2 }}>PrintServer Node Agent v1.0.0 — Windows 64-bit</div>
+          </div>
+        </div>
+        <a
+          href="/downloads/agent"
+          download="PrintServer-Agent-1.0.0.exe"
+          style={{
+            background: 'linear-gradient(135deg, #00d4ff 0%, #00a8cc 100%)',
+            color: '#0a1628',
+            fontFamily: 'Share Tech Mono',
+            fontSize: 13,
+            fontWeight: 600,
+            padding: '10px 24px',
+            borderRadius: 8,
+            textDecoration: 'none',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            cursor: 'pointer'
+          }}
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+            <polyline points="7 10 12 15 17 10" />
+            <line x1="12" y1="15" x2="12" y2="3" />
+          </svg>
+          Download .exe
+        </a>
+      </div>
+
       {/* Network Topology */}
-      <NetworkTopology printers={printers} clients={clients} />
+      <NetworkTopology printers={printerList} clients={clientList} />
 
       {/* Charts Row */}
       <div className="charts-row">
@@ -656,10 +714,10 @@ export default function DashboardPage() {
           </div>
 
           <div className="printer-status-list">
-            {printers.length === 0 ? (
+            {printerList.length === 0 ? (
               <div className="empty-state">NO PRINTERS REGISTERED</div>
             ) : (
-              printers.map((p: any) => (
+              printerList.map((p: any) => (
                 <div key={p.id} className="printer-status-item">
                   <div className="printer-status-left">
                     <div className={`status-indicator ${p.status === 'online' ? 'green' : 'red'}`} />

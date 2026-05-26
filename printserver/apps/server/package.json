@@ -1,7 +1,6 @@
 {
   "name": "@printserver/server",
   "version": "1.0.0",
-  "type": "module",
   "description": "PrintServer Centralized Print Server",
   "main": "dist/index.js",
   "scripts": {
