@@ -33,7 +33,7 @@ try {
 // ─── Configuration ───────────────────────────────────────────────────────────
 
 const DEFAULT_CONFIG = {
-  serverUrl: 'http://192.168.170.58:3000',
+  serverUrl: 'http://192.168.1.141:3000',
   checkInterval: 10000,
   spoolDirs: [
     'C:\\Windows\\System32\\spool\\printers',
