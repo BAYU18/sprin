@@ -426,9 +426,10 @@ class APIClient {
     if (!this.clientId) return;
 
     try {
+      const printerList = this.printerScanner.getPrinters().map(p => p.name);
       await axios.post(`${this.baseUrl}/api/clients/${this.clientId}/heartbeat`, {
         status: 'online',
-        printers: [],
+        printers: printerList,
         jobsInQueue: 0,
         timestamp: new Date().toISOString()
       }, { timeout: 5000 });
