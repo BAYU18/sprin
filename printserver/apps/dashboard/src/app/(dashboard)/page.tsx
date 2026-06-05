@@ -918,7 +918,7 @@ export default function DashboardPage() {
       </div>
 
       {/* Live Active Server Nodes */}
-      <ActiveNodeList nodes={activeNodeList} />
+      {activeNodeList.length > 0 && <ActiveNodeList nodes={activeNodeList} />}
 
       {/* Download Agent Card */}
       <div className="download-agent-card" style={{
