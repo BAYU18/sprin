@@ -5,15 +5,13 @@ import { logger } from '../utils/logger.js';
 let knex: KnexType | null = null;
 
 export async function setupDatabase(fastify: any) {
+    if (!process.env.DATABASE_URL) {
+        throw new Error('DATABASE_URL environment variable is missing');
+    }
+
     const config: Knex.Config = {
         client: 'pg',
-        connection: process.env.DATABASE_URL || {
-            host: 'localhost',
-            port: 5432,
-            database: 'printserver',
-            user: 'printserver',
-            password: 'printserver'
-        },
+        connection: process.env.DATABASE_URL,
         pool: {
             min: 2,
             max: 20,

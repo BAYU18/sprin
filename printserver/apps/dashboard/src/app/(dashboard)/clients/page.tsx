@@ -134,9 +134,9 @@ export default function ClientsPage() {
                     <span className="text-slate-400 text-sm">Printers ({client.metadata.printers.length})</span>
                   </div>
                   <div className="flex flex-wrap gap-1">
-                    {client.metadata.printers.slice(0, 8).map((printer: string, idx: number) => (
+                    {client.metadata.printers.slice(0, 8).map((printer: any, idx: number) => (
                       <span key={idx} className="px-2 py-1 bg-blue-500/20 text-blue-400 rounded text-xs">
-                        {printer}
+                        {typeof printer === 'string' ? printer : printer?.name || 'Unknown'}
                       </span>
                     ))}
                     {client.metadata.printers.length > 8 && (

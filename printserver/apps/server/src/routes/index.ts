@@ -13,6 +13,9 @@ import { setupDiscoveryRoutes } from './discovery.js';
 import { setupSetupRoutes } from './setup.js';
 import { setupIPPRoutes } from './ipp.js';
 import { setupDownloadsRoutes } from './downloads.js';
+import { setupDriversRoutes } from './drivers.js';
+import { setupPaperRoutes } from './paper.js';
+import { setupBadgesRoutes } from './badges.js';
 
 export async function setupRoutes(fastify: FastifyInstance) {
     await fastify.register(setupAuth);
@@ -41,5 +44,8 @@ export async function setupRoutes(fastify: FastifyInstance) {
     await fastify.register(setupSetupRoutes);
     await fastify.register(setupIPPRoutes);
     await fastify.register(setupDownloadsRoutes);
-    fastify.log.info('[Routes] Setup, IPP and Downloads routes registered');
+    await fastify.register(setupDriversRoutes);
+    await fastify.register(setupPaperRoutes, { prefix: '/api' });
+    await fastify.register(setupBadgesRoutes, { prefix: '/api' });
+    fastify.log.info('[Routes] Setup, IPP, Downloads, Drivers, Paper and Badges routes registered');
 }

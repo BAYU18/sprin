@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { printers } from '@/lib/api';
+import { printers, settings } from '@/lib/api';
 import {
   Server,
   Monitor,
@@ -17,8 +17,12 @@ import {
   Shield,
   Info,
   RefreshCw,
-  Globe
+  Globe,
+  Download,
+  AlertTriangle,
+  HelpCircle
 } from 'lucide-react';
+import { format } from 'date-fns';
 
 interface Printer {
   id: number;
@@ -42,7 +46,7 @@ const deviceInstructions = [
   {
     platform: 'Windows',
     icon: Monitor,
-    color: 'bg-blue-500',
+    color: 'var(--accent-cyan)',
     instructions: [
       'Buka Settings → Printers & scanners',
       'Klik "Add a printer"',
@@ -55,7 +59,7 @@ const deviceInstructions = [
   {
     platform: 'Mac',
     icon: Apple,
-    color: 'bg-gray-500',
+    color: 'var(--text-muted)',
     instructions: [
       'Buka System Settings → Printers & Scanners',
       'Klik tombol + untuk menambah printer',
@@ -68,7 +72,7 @@ const deviceInstructions = [
   {
     platform: 'iPhone/iPad',
     icon: Smartphone,
-    color: 'bg-gray-600',
+    color: 'var(--text-muted)',
     instructions: [
       'AirPrint otomatis mendeteksi printer',
       'Tidak perlu setup manual',
@@ -80,10 +84,10 @@ const deviceInstructions = [
   {
     platform: 'Android',
     icon: Globe,
-    color: 'bg-green-500',
+    color: 'var(--accent-green)',
     instructions: [
       'Buka Settings → Connected devices → Printing',
-      'Aktifkan Cloud Print atau北方 Printing Service',
+      'Aktifkan Cloud Print atau Printing Service',
       'Pilih printer dari daftar yang tersedia',
       'Atur default printer jika perlu'
     ],
@@ -92,7 +96,7 @@ const deviceInstructions = [
   {
     platform: 'Chromebook',
     icon: Chrome,
-    color: 'bg-red-500',
+    color: 'var(--accent-red)',
     instructions: [
       'Tekan Ctrl+P untuk membuka dialog print',
       'Pilih printer dari dropdown',
@@ -103,16 +107,45 @@ const deviceInstructions = [
   }
 ];
 
+const tabMapping: Record<string, string> = {
+  'Windows': 'Windows',
+  'Mac': 'Mac',
+  'iOS': 'iPhone/iPad',
+  'Android': 'Android',
+  'ChromeOS': 'Chromebook'
+};
+
 export default function ConnectPage() {
   const [serverInfo, setServerInfo] = useState<ServerInfo>({
-    name: process.env.NEXT_PUBLIC_SERVER_NAME || 'PrintServer Pro',
-    ip: process.env.NEXT_PUBLIC_SERVER_IP || '192.168.1.100',
-    port: parseInt(process.env.NEXT_PUBLIC_SERVER_PORT || '631', 10)
+    name: 'PrintServer Pro',
+    ip: '127.0.0.1',
+    port: 631
   });
   const [printersList, setPrintersList] = useState<Printer[]>([]);
   const [loading, setLoading] = useState(true);
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [showQR, setShowQR] = useState(true);
+  const [activePlatform, setActivePlatform] = useState('Windows');
+  const [searchQuery, setSearchQuery] = useState('');
+  
+  // Dynamic Agent States
+  const [agentVersion, setAgentVersion] = useState('1.2.0');
+  const [agentSize, setAgentSize] = useState('~42 MB');
+  const [agentBuildTime, setAgentBuildTime] = useState<string | null>(null);
+
+  // Hover states for inline styles
+  const [hoveredEl, setHoveredEl] = useState<string | null>(null);
+
+  const fetchServerInfo = async () => {
+    try {
+      const response = await settings.serverInfo();
+      if (response?.data) {
+        setServerInfo(response.data);
+      }
+    } catch (error) {
+      console.error('Failed to fetch server info:', error);
+    }
+  };
 
   const fetchPrinters = async () => {
     try {
@@ -126,8 +159,29 @@ export default function ConnectPage() {
     }
   };
 
+  const fetchAgentInfo = async () => {
+    try {
+      const response = await fetch('/downloads/agent/info');
+      if (response.ok) {
+        const data = await response.json();
+        if (data.version) setAgentVersion(data.version);
+        if (data.size) {
+          const mb = (data.size / (1024 * 1024)).toFixed(1);
+          setAgentSize(`${mb} MB`);
+        }
+        if (data.buildTime) {
+          setAgentBuildTime(data.buildTime);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to fetch agent info:', error);
+    }
+  };
+
   useEffect(() => {
+    fetchServerInfo();
     fetchPrinters();
+    fetchAgentInfo();
     const interval = setInterval(fetchPrinters, 15000);
     return () => clearInterval(interval);
   }, []);
@@ -160,411 +214,666 @@ export default function ConnectPage() {
     return `ipp://${serverInfo.ip}:${serverInfo.port}/printers/${printer.name.toLowerCase().replace(/\s+/g, '-')}`;
   };
 
+  const formatBuildTime = (timeStr: string | null) => {
+    if (!timeStr) return '';
+    try {
+      return format(new Date(timeStr), 'dd MMM yyyy HH:mm');
+    } catch (e) {
+      return timeStr;
+    }
+  };
+
+  const currentDevice = deviceInstructions.find(d => d.platform === tabMapping[activePlatform]) || deviceInstructions[0];
+
+  const getStatusBadgeStyle = (status: string) => {
+    const s = status.toLowerCase();
+    if (s === 'idle' || s === 'ready' || s === 'online') {
+      return {
+        background: 'rgba(0, 255, 136, 0.1)',
+        color: 'var(--accent-green)',
+        border: '1px solid rgba(0, 255, 136, 0.3)',
+      };
+    } else if (s === 'processing' || s === 'busy') {
+      return {
+        background: 'rgba(245, 158, 11, 0.1)',
+        color: 'var(--accent-amber)',
+        border: '1px solid rgba(245, 158, 11, 0.3)',
+      };
+    } else {
+      return {
+        background: 'rgba(255, 61, 90, 0.1)',
+        color: 'var(--accent-red)',
+        border: '1px solid rgba(255, 61, 90, 0.3)',
+      };
+    }
+  };
+
+  const filteredPrinters = printersList.filter(p =>
+    p.name.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold">How to Connect</h1>
-          <p className="text-slate-400 text-sm mt-1">Panduan koneksi printer ke PrintServer Pro</p>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+      
+      {/* Header Row */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '16px' }}>
+        <div style={{ display: 'flex', flexDirection: 'column' }}>
+          <h1 style={{ fontSize: '24px', fontWeight: '700', color: 'var(--text-primary)', fontFamily: "'Rajdhani', sans-serif", letterSpacing: '1px' }}>
+            How to Connect
+          </h1>
+          <p style={{ fontSize: '14px', color: 'var(--text-muted)', marginTop: '4px' }}>
+            Panduan koneksi printer ke PrintServer Pro
+          </p>
         </div>
         <button
           onClick={fetchPrinters}
-          className="btn-secondary flex items-center gap-2"
+          className="btn-primary"
           disabled={loading}
+          style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '8px' }}
         >
-          <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-          Refresh
+          <RefreshCw
+            style={{
+              width: '16px',
+              height: '16px',
+              animation: loading ? 'spin 1s linear infinite' : 'none'
+            }}
+          />
+          <span style={{ fontFamily: "'Rajdhani', sans-serif", fontWeight: '600' }}>Refresh</span>
         </button>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="space-y-6">
-          <div className="card">
-            <div className="flex items-center gap-3 mb-4">
-              <div className="p-2 bg-blue-500/20 rounded-lg">
-                <Server className="w-6 h-6 text-blue-500" />
-              </div>
-              <div>
-                <h2 className="text-lg font-semibold">Server Information</h2>
-                <p className="text-slate-400 text-sm">Informasi server untuk koneksi</p>
-              </div>
+      {/* Top Grid: Server Info & QR Code */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '24px' }}>
+        
+        {/* Server Information Card */}
+        <div className="card" style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <div style={{ padding: '10px', background: 'rgba(0, 212, 255, 0.1)', border: '1px solid rgba(0, 212, 255, 0.2)', borderRadius: '8px', color: 'var(--accent-cyan)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <Server style={{ width: '24px', height: '24px' }} />
             </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div className="bg-slate-700/50 rounded-lg p-4">
-                <label className="text-slate-400 text-sm block mb-1">Server Name</label>
-                <div className="flex items-center gap-2">
-                  <span className="font-semibold text-lg">{serverInfo.name}</span>
-                  <button
-                    onClick={() => copyToClipboard(serverInfo.name, 'name')}
-                    className="p-1 hover:bg-slate-600 rounded"
-                  >
-                    {copiedField === 'name' ? (
-                      <Check className="w-4 h-4 text-green-500" />
-                    ) : (
-                      <Copy className="w-4 h-4 text-slate-400" />
-                    )}
-                  </button>
-                </div>
-              </div>
-
-              <div className="bg-slate-700/50 rounded-lg p-4">
-                <label className="text-slate-400 text-sm block mb-1">IP Address</label>
-                <div className="flex items-center gap-2">
-                  <span className="font-semibold text-lg">{serverInfo.ip}</span>
-                  <button
-                    onClick={() => copyToClipboard(serverInfo.ip, 'ip')}
-                    className="p-1 hover:bg-slate-600 rounded"
-                  >
-                    {copiedField === 'ip' ? (
-                      <Check className="w-4 h-4 text-green-500" />
-                    ) : (
-                      <Copy className="w-4 h-4 text-slate-400" />
-                    )}
-                  </button>
-                </div>
-              </div>
-
-              <div className="bg-slate-700/50 rounded-lg p-4">
-                <label className="text-slate-400 text-sm block mb-1">Port</label>
-                <div className="flex items-center gap-2">
-                  <span className="font-semibold text-lg">{serverInfo.port}</span>
-                  <button
-                    onClick={() => copyToClipboard(serverInfo.port.toString(), 'port')}
-                    className="p-1 hover:bg-slate-600 rounded"
-                  >
-                    {copiedField === 'port' ? (
-                      <Check className="w-4 h-4 text-green-500" />
-                    ) : (
-                      <Copy className="w-4 h-4 text-slate-400" />
-                    )}
-                  </button>
-                </div>
-              </div>
-
-              <div className="bg-slate-700/50 rounded-lg p-4">
-                <label className="text-slate-400 text-sm block mb-1">Protocol</label>
-                <span className="font-semibold text-lg">IPP (Internet Printing)</span>
-              </div>
+            <div>
+              <h2 style={{ fontSize: '18px', fontWeight: '600', color: 'var(--text-primary)', fontFamily: "'Rajdhani', sans-serif" }}>
+                Server Information
+              </h2>
+              <p style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
+                Informasi server untuk koneksi manual
+              </p>
             </div>
           </div>
 
-          <div className="card">
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-3">
-                <div className="p-2 bg-green-500/20 rounded-lg">
-                  <QrCode className="w-6 h-6 text-green-500" />
-                </div>
-                <div>
-                  <h2 className="text-lg font-semibold">Scan QR Code</h2>
-                  <p className="text-slate-400 text-sm">Pindai untuk setup otomatis</p>
-                </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+            
+            {/* Server Name */}
+            <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: '8px', padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              <span style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Server Name</span>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                <span style={{ fontSize: '15px', fontWeight: '600', color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {serverInfo.name}
+                </span>
+                <button
+                  onClick={() => copyToClipboard(serverInfo.name, 'name')}
+                  style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: copiedField === 'name' ? 'var(--accent-green)' : 'var(--text-muted)' }}
+                  title="Copy Server Name"
+                >
+                  {copiedField === 'name' ? <Check style={{ width: '16px', height: '16px' }} /> : <Copy style={{ width: '16px', height: '16px' }} />}
+                </button>
               </div>
-              <button
-                onClick={() => setShowQR(!showQR)}
-                className="text-sm text-blue-400 hover:text-blue-300"
-              >
-                {showQR ? 'Sembunyikan' : 'Tampilkan'}
-              </button>
             </div>
 
-            {showQR && (
-              <div className="flex flex-col items-center">
-                <div className="bg-white p-4 rounded-xl">
-                  <img
-                    src={generateQRDataUrl()}
-                    alt="Setup QR Code"
-                    className="w-48 h-48"
-                  />
-                </div>
-                <p className="text-slate-400 text-sm mt-3 text-center">
-                  Scan kode QR ini dengan kamera perangkat Anda untuk terhubung ke server secara otomatis.
+            {/* Server IP */}
+            <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: '8px', padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              <span style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>IP Address</span>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                <span style={{ fontSize: '15px', fontWeight: '600', color: 'var(--text-primary)', fontFamily: "'Share Tech Mono', monospace" }}>
+                  {serverInfo.ip}
+                </span>
+                <button
+                  onClick={() => copyToClipboard(serverInfo.ip, 'ip')}
+                  style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: copiedField === 'ip' ? 'var(--accent-green)' : 'var(--text-muted)' }}
+                  title="Copy IP Address"
+                >
+                  {copiedField === 'ip' ? <Check style={{ width: '16px', height: '16px' }} /> : <Copy style={{ width: '16px', height: '16px' }} />}
+                </button>
+              </div>
+            </div>
+
+            {/* Server Port */}
+            <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: '8px', padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              <span style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Port</span>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                <span style={{ fontSize: '15px', fontWeight: '600', color: 'var(--text-primary)', fontFamily: "'Share Tech Mono', monospace" }}>
+                  {serverInfo.port}
+                </span>
+                <button
+                  onClick={() => copyToClipboard(serverInfo.port.toString(), 'port')}
+                  style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: copiedField === 'port' ? 'var(--accent-green)' : 'var(--text-muted)' }}
+                  title="Copy Port"
+                >
+                  {copiedField === 'port' ? <Check style={{ width: '16px', height: '16px' }} /> : <Copy style={{ width: '16px', height: '16px' }} />}
+                </button>
+              </div>
+            </div>
+
+            {/* Protocol */}
+            <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: '8px', padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              <span style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Protocol</span>
+              <span style={{ fontSize: '15px', fontWeight: '600', color: 'var(--text-primary)' }}>
+                IPP (Internet Printing)
+              </span>
+            </div>
+
+          </div>
+
+          {/* Master IPP URL Row */}
+          <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: '8px', padding: '16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            <span style={{ fontSize: '12px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: '600' }}>Master IPP URL Server</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <code style={{ background: 'var(--bg-primary)', padding: '10px 12px', borderRadius: '6px', fontSize: '13px', fontFamily: "'Share Tech Mono', monospace", color: 'var(--accent-cyan)', border: '1px solid var(--border)', wordBreak: 'break-all', flex: 1 }}>
+                {getServerUrl()}
+              </code>
+              <button
+                onClick={() => copyToClipboard(getServerUrl(), 'url')}
+                style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: '8px', borderRadius: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: copiedField === 'url' ? 'var(--accent-green)' : 'var(--accent-cyan)', transition: 'background-color 0.2s', backgroundColor: hoveredEl === 'copy-url' ? 'rgba(0, 212, 255, 0.1)' : 'transparent' }}
+                onMouseEnter={() => setHoveredEl('copy-url')}
+                onMouseLeave={() => setHoveredEl(null)}
+                title="Copy Master IPP URL"
+              >
+                {copiedField === 'url' ? <Check style={{ width: '18px', height: '18px' }} /> : <Copy style={{ width: '18px', height: '18px' }} />}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* QR Code & Mobile Connection Card */}
+        <div className="card" style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <div style={{ padding: '10px', background: 'rgba(0, 255, 136, 0.1)', border: '1px solid rgba(0, 255, 136, 0.2)', borderRadius: '8px', color: 'var(--accent-green)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <QrCode style={{ width: '24px', height: '24px' }} />
+              </div>
+              <div>
+                <h2 style={{ fontSize: '18px', fontWeight: '600', color: 'var(--text-primary)', fontFamily: "'Rajdhani', sans-serif" }}>
+                  Scan QR Code
+                </h2>
+                <p style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
+                  Pindai untuk setup mobile otomatis
                 </p>
+              </div>
+            </div>
+            <button
+              onClick={() => setShowQR(!showQR)}
+              style={{ background: 'transparent', border: 'none', color: 'var(--accent-cyan)', fontSize: '13px', cursor: 'pointer', fontWeight: '600', fontFamily: "'Rajdhani', sans-serif", textTransform: 'uppercase' }}
+            >
+              {showQR ? 'Sembunyikan' : 'Tampilkan'}
+            </button>
+          </div>
+
+          {showQR && (
+            <div style={{ display: 'flex', flexDirection: 'row', flexWrap: 'wrap', gap: '20px', alignItems: 'center', justifyContent: 'center' }}>
+              
+              {/* QR Image Wrapper */}
+              <div style={{ background: '#ffffff', padding: '12px', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, border: '1px solid var(--border)', boxShadow: 'var(--glow-cyan)' }}>
+                <img
+                  src={generateQRDataUrl()}
+                  alt="Setup QR Code"
+                  style={{ width: '144px', height: '144px', display: 'block' }}
+                />
+              </div>
+
+              {/* Instructions and Setup Link */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', flex: 1, minWidth: '200px' }}>
+                <ul style={{ display: 'flex', flexDirection: 'column', gap: '8px', padding: 0, margin: 0, listStyleType: 'none', fontSize: '13px', color: 'var(--text-primary)', lineHeight: '1.4' }}>
+                  <li style={{ display: 'flex', gap: '8px', alignItems: 'flex-start' }}>
+                    <span style={{ color: 'var(--accent-green)', fontWeight: 'bold' }}>✓</span>
+                    <span>Hubungkan perangkat ke Wi-Fi yang sama dengan server.</span>
+                  </li>
+                  <li style={{ display: 'flex', gap: '8px', alignItems: 'flex-start' }}>
+                    <span style={{ color: 'var(--accent-green)', fontWeight: 'bold' }}>✓</span>
+                    <span>Pindai kode QR menggunakan kamera HP atau tablet Anda.</span>
+                  </li>
+                  <li style={{ display: 'flex', gap: '8px', alignItems: 'flex-start' }}>
+                    <span style={{ color: 'var(--accent-green)', fontWeight: 'bold' }}>✓</span>
+                    <span>Ikuti petunjuk konfigurasi profil printer otomatis.</span>
+                  </li>
+                </ul>
+
                 <a
                   href={getSetupUrl()}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="mt-3 flex items-center gap-2 text-blue-400 hover:text-blue-300 text-sm"
+                  className="btn-primary"
+                  style={{
+                    alignSelf: 'flex-start',
+                    fontSize: '12px',
+                    padding: '8px 14px',
+                    marginTop: '4px',
+                    textDecoration: 'none',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px'
+                  }}
                 >
-                  <ExternalLink className="w-4 h-4" />
-                  Buka Setup Page
+                  <ExternalLink style={{ width: '14px', height: '14px' }} />
+                  <span>Buka Setup Page</span>
                 </a>
               </div>
-            )}
+
+            </div>
+          )}
+        </div>
+
+      </div>
+
+      {/* Middle Grid: Device Instructions & Available Printers */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '24px' }}>
+        
+        {/* Device Instructions Card */}
+        <div className="card" style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <div style={{ padding: '10px', background: 'rgba(245, 158, 11, 0.1)', border: '1px solid rgba(245, 158, 11, 0.2)', borderRadius: '8px', color: 'var(--accent-amber)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <Wifi style={{ width: '24px', height: '24px' }} />
+            </div>
+            <div>
+              <h2 style={{ fontSize: '18px', fontWeight: '600', color: 'var(--text-primary)', fontFamily: "'Rajdhani', sans-serif" }}>
+                Connect per Device
+              </h2>
+              <p style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
+                Panduan koneksi spesifik untuk tipe perangkat Anda
+              </p>
+            </div>
           </div>
 
-          <div className="card">
-            <div className="flex items-center gap-3 mb-4">
-              <div className="p-2 bg-purple-500/20 rounded-lg">
-                <Shield className="w-6 h-6 text-purple-500" />
-              </div>
-              <div>
-                <h2 className="text-lg font-semibold">Manual Setup</h2>
-                <p className="text-slate-400 text-sm">Setup manual dengan IP server</p>
-              </div>
+          {/* Cyberpunk Tabs Bar */}
+          <div style={{ display: 'flex', flexDirection: 'row', gap: '8px', borderBottom: '1px solid var(--border)', paddingBottom: '8px', overflowX: 'auto', whiteSpace: 'nowrap' }}>
+            {['Windows', 'Mac', 'iOS', 'Android', 'ChromeOS'].map((plat) => {
+              const isActive = activePlatform === plat;
+              const platInfo = deviceInstructions.find(d => d.platform === tabMapping[plat]) || deviceInstructions[0];
+              const IconComp = platInfo.icon;
+              return (
+                <button
+                  key={plat}
+                  onClick={() => setActivePlatform(plat)}
+                  style={{
+                    padding: '8px 14px',
+                    background: isActive ? 'rgba(0, 212, 255, 0.08)' : 'transparent',
+                    border: '1px solid',
+                    borderColor: isActive ? 'var(--accent-cyan)' : 'transparent',
+                    borderRadius: '6px',
+                    color: isActive ? 'var(--accent-cyan)' : 'var(--text-muted)',
+                    fontFamily: "'Rajdhani', sans-serif",
+                    fontWeight: '600',
+                    fontSize: '13px',
+                    cursor: 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    transition: 'all 0.2s ease',
+                    boxShadow: isActive ? 'var(--glow-cyan)' : 'none',
+                    textShadow: isActive ? '0 0 8px rgba(0, 212, 255, 0.4)' : 'none',
+                  }}
+                >
+                  <IconComp style={{ width: '14px', height: '14px' }} />
+                  <span>{plat}</span>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Tab Content Instructions */}
+          <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: '8px', padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--accent-cyan)', boxShadow: 'var(--glow-cyan)' }} />
+              <span style={{ fontSize: '13px', fontWeight: 'bold', textTransform: 'uppercase', color: 'var(--text-primary)', fontFamily: "'Rajdhani', sans-serif", letterSpacing: '0.5px' }}>
+                Setup Langkah demi Langkah ({activePlatform})
+              </span>
             </div>
 
-            <div className="space-y-4">
-              <div className="bg-slate-700/50 rounded-lg p-4">
-                <label className="text-slate-400 text-sm block mb-2">IPP URL Server</label>
-                <div className="flex items-center gap-2">
-                  <code className="flex-1 bg-slate-800 px-3 py-2 rounded text-sm font-mono text-green-400 break-all">
-                    {getServerUrl()}
-                  </code>
-                  <button
-                    onClick={() => copyToClipboard(getServerUrl(), 'url')}
-                    className="p-2 hover:bg-slate-600 rounded"
-                  >
-                    {copiedField === 'url' ? (
-                      <Check className="w-5 h-5 text-green-500" />
-                    ) : (
-                      <Copy className="w-5 h-5 text-slate-400" />
-                    )}
-                  </button>
-                </div>
-              </div>
+            <ol style={{ display: 'flex', flexDirection: 'column', gap: '10px', padding: 0, margin: 0, listStyleType: 'none' }}>
+              {currentDevice.instructions.map((step, idx) => (
+                <li key={idx} style={{ display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
+                  <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '22px', height: '22px', borderRadius: '50%', background: 'rgba(0, 212, 255, 0.08)', border: '1px solid rgba(0, 212, 255, 0.3)', color: 'var(--accent-cyan)', fontFamily: "'Share Tech Mono', monospace", fontWeight: 'bold', fontSize: '11px', flexShrink: 0 }}>
+                    {idx + 1}
+                  </span>
+                  <span style={{ fontSize: '13px', color: 'var(--text-primary)', lineHeight: '1.5' }}>
+                    {step}
+                  </span>
+                </li>
+              ))}
+            </ol>
 
-              <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-4">
-                <div className="flex items-start gap-3">
-                  <Info className="w-5 h-5 text-yellow-500 mt-0.5" />
-                  <div>
-                    <p className="text-yellow-200 text-sm font-medium">Petunjuk:</p>
-                    <p className="text-yellow-100/70 text-sm mt-1">
-                      Gunakan IP address di atas untuk menghubungkan printer secara manual pada perangkat Anda.
-                      Pastikan perangkat berada dalam jaringan yang sama dengan server.
-                    </p>
-                  </div>
-                </div>
-              </div>
+            {/* Tip Box */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 12px', background: 'rgba(245, 158, 11, 0.05)', border: '1px dashed rgba(245, 158, 11, 0.3)', borderRadius: '6px', color: 'var(--accent-amber)', fontSize: '12px', marginTop: '4px' }}>
+              <Info style={{ width: '14px', height: '14px', flexShrink: 0 }} />
+              <span><strong>Tips:</strong> {currentDevice.tip}</span>
             </div>
           </div>
         </div>
 
-        <div className="space-y-6">
-          <div className="card">
-            <div className="flex items-center gap-3 mb-4">
-              <div className="p-2 bg-orange-500/20 rounded-lg">
-                <Wifi className="w-6 h-6 text-orange-500" />
+        {/* Available Printers Card */}
+        <div className="card" style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+          
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <div style={{ padding: '10px', background: 'rgba(0, 212, 255, 0.1)', border: '1px solid rgba(0, 212, 255, 0.2)', borderRadius: '8px', color: 'var(--accent-cyan)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <Printer style={{ width: '24px', height: '24px' }} />
               </div>
               <div>
-                <h2 className="text-lg font-semibold">Connect per Device</h2>
-                <p className="text-slate-400 text-sm">Panduan koneksi per jenis perangkat</p>
+                <h2 style={{ fontSize: '18px', fontWeight: '600', color: 'var(--text-primary)', fontFamily: "'Rajdhani', sans-serif" }}>
+                  Available Printers
+                </h2>
+                <p style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
+                  Pilih printer dan copy IPP URL tujuan
+                </p>
               </div>
-            </div>
-
-            <div className="space-y-4">
-              {deviceInstructions.map((device) => {
-                const IconComponent = device.icon;
-                return (
-                  <div
-                    key={device.platform}
-                    className="bg-slate-700/30 rounded-lg p-4 border border-slate-700"
-                  >
-                    <div className="flex items-center gap-3 mb-3">
-                      <div className={`p-2 ${device.color} rounded-lg`}>
-                        <IconComponent className="w-5 h-5 text-white" />
-                      </div>
-                      <h3 className="font-semibold">{device.platform}</h3>
-                    </div>
-                    <ol className="space-y-2 text-sm text-slate-300">
-                      {device.instructions.map((instruction, idx) => (
-                        <li key={idx} className="flex items-start gap-2">
-                          <span className="flex-shrink-0 w-5 h-5 bg-slate-600 rounded-full flex items-center justify-center text-xs text-slate-300">
-                            {idx + 1}
-                          </span>
-                          <span>{instruction}</span>
-                        </li>
-                      ))}
-                    </ol>
-                    <p className="text-xs text-slate-500 mt-2 flex items-center gap-1">
-                      <Info className="w-3 h-3" />
-                      {device.tip}
-                    </p>
-                  </div>
-                );
-              })}
             </div>
           </div>
 
-          <div className="card">
-            <div className="flex items-center gap-3 mb-4">
-              <div className="p-2 bg-cyan-500/20 rounded-lg">
-                <Printer className="w-6 h-6 text-cyan-500" />
-              </div>
-              <div>
-                <h2 className="text-lg font-semibold">Available Printers</h2>
-                <p className="text-slate-400 text-sm">Daftar printer yang tersedia di server</p>
-              </div>
-            </div>
+          {/* Search bar inside Card */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <input
+              type="text"
+              placeholder="Cari nama printer..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="input"
+              style={{ flex: 1, padding: '8px 12px', fontSize: '13px' }}
+            />
+          </div>
 
-            {loading ? (
-              <div className="flex items-center justify-center h-32">
-                <RefreshCw className="w-6 h-6 text-slate-400 animate-spin" />
-              </div>
-            ) : printersList.length === 0 ? (
-              <div className="text-center py-8">
-                <Printer className="w-12 h-12 text-slate-600 mx-auto mb-3" />
-                <p className="text-slate-400">Belum ada printer yang terdaftar</p>
-                <p className="text-slate-500 text-sm mt-1">Tambahkan printer di halaman Printers</p>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                {printersList.map((printer) => (
+          {/* Printer List / Grid */}
+          {loading ? (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '200px', gap: '12px' }}>
+              <RefreshCw style={{ width: '24px', height: '24px', color: 'var(--accent-cyan)', animation: 'spin 1s linear infinite' }} />
+              <span style={{ fontSize: '13px', color: 'var(--text-muted)', fontFamily: "'Share Tech Mono', monospace" }}>Loading printer catalog...</span>
+            </div>
+          ) : filteredPrinters.length === 0 ? (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '200px', gap: '12px', border: '1px dashed var(--border)', borderRadius: '8px' }}>
+              <Printer style={{ width: '36px', height: '36px', color: 'var(--text-dim)' }} />
+              <span style={{ fontSize: '13px', color: 'var(--text-muted)', textAlign: 'center' }}>
+                {searchQuery ? 'Printer tidak ditemukan.' : 'Belum ada printer yang terdaftar.'}
+              </span>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: '250px', overflowY: 'auto', paddingRight: '4px' }}>
+              {filteredPrinters.map((printer) => {
+                const ippUrl = getIppUrl(printer);
+                const isCopied = copiedField === `printer-${printer.id}`;
+                return (
                   <div
                     key={printer.id}
-                    className="bg-slate-700/50 rounded-lg p-4 border border-slate-600 hover:border-slate-500 transition-colors"
+                    style={{
+                      background: 'var(--bg-secondary)',
+                      border: '1px solid var(--border)',
+                      borderRadius: '8px',
+                      padding: '12px 14px',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '8px',
+                      transition: 'border-color 0.2s',
+                    }}
                   >
-                    <div className="flex items-center justify-between mb-2">
-                      <div className="flex items-center gap-3">
-                        <div className={`w-3 h-3 rounded-full ${
-                          printer.status === 'idle' || printer.status === 'ready'
-                            ? 'bg-green-500'
-                            : printer.status === 'processing'
-                            ? 'bg-yellow-500'
-                            : 'bg-red-500'
-                        }`} />
-                        <span className="font-medium">{printer.name}</span>
-                      </div>
-                      <span className={`text-xs px-2 py-1 rounded ${
-                        printer.status === 'idle' || printer.status === 'ready'
-                          ? 'bg-green-500/20 text-green-400'
-                          : printer.status === 'processing'
-                          ? 'bg-yellow-500/20 text-yellow-400'
-                          : 'bg-red-500/20 text-red-400'
-                      }`}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                      <span style={{ fontSize: '14px', fontWeight: '600', color: 'var(--text-primary)', fontFamily: "'Rajdhani', sans-serif" }}>
+                        {printer.name}
+                      </span>
+                      <span style={{
+                        fontSize: '10px',
+                        padding: '2px 6px',
+                        borderRadius: '4px',
+                        fontWeight: '600',
+                        fontFamily: "'Share Tech Mono', monospace",
+                        ...getStatusBadgeStyle(printer.status)
+                      }}>
                         {printer.status}
                       </span>
                     </div>
-                    <div className="flex items-center gap-2 mt-2">
-                      <code className="flex-1 text-xs text-slate-400 font-mono bg-slate-800 px-2 py-1 rounded break-all">
-                        {getIppUrl(printer)}
+
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'var(--bg-primary)', padding: '6px 10px', borderRadius: '4px', border: '1px solid var(--border)' }}>
+                      <code style={{ fontSize: '11px', fontFamily: "'Share Tech Mono', monospace", color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+                        {ippUrl}
                       </code>
                       <button
-                        onClick={() => copyToClipboard(getIppUrl(printer), `printer-${printer.id}`)}
-                        className="p-1 hover:bg-slate-600 rounded"
+                        onClick={() => copyToClipboard(ippUrl, `printer-${printer.id}`)}
+                        style={{
+                          background: 'transparent',
+                          border: 'none',
+                          cursor: 'pointer',
+                          padding: '4px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          color: isCopied ? 'var(--accent-green)' : 'var(--text-muted)',
+                        }}
+                        title="Copy Printer IPP URL"
                       >
-                        {copiedField === `printer-${printer.id}` ? (
-                          <Check className="w-4 h-4 text-green-500" />
-                        ) : (
-                          <Copy className="w-4 h-4 text-slate-400" />
-                        )}
+                        {isCopied ? <Check style={{ width: '14px', height: '14px' }} /> : <Copy style={{ width: '14px', height: '14px' }} />}
                       </button>
                     </div>
+
                     {printer.capabilities && (
-                      <div className="flex items-center gap-2 mt-2">
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
                         {printer.capabilities.color && (
-                          <span className="text-xs bg-blue-500/20 text-blue-400 px-2 py-0.5 rounded">
-                            Color
-                          </span>
+                          <span style={{ fontSize: '9px', padding: '1px 5px', borderRadius: '3px', background: 'rgba(0, 212, 255, 0.1)', color: 'var(--accent-cyan)', border: '1px solid rgba(0, 212, 255, 0.2)' }}>Color</span>
                         )}
                         {printer.capabilities.duplex && (
-                          <span className="text-xs bg-purple-500/20 text-purple-400 px-2 py-0.5 rounded">
-                            Duplex
-                          </span>
+                          <span style={{ fontSize: '9px', padding: '1px 5px', borderRadius: '3px', background: 'rgba(139, 92, 246, 0.1)', color: '#a78bfa', border: '1px solid rgba(139, 92, 246, 0.2)' }}>Duplex</span>
                         )}
-                        {printer.capabilities.paperSizes?.map((size) => (
-                          <span
-                            key={size}
-                            className="text-xs bg-slate-600 text-slate-300 px-2 py-0.5 rounded"
-                          >
-                            {size}
-                          </span>
+                        {printer.capabilities.paperSizes?.slice(0, 3).map((sz) => (
+                          <span key={sz} style={{ fontSize: '9px', padding: '1px 5px', borderRadius: '3px', background: 'rgba(74, 96, 128, 0.15)', color: 'var(--text-primary)', border: '1px solid var(--border)' }}>{sz}</span>
                         ))}
                       </div>
                     )}
                   </div>
-                ))}
-              </div>
-            )}
-          </div>
+                );
+              })}
+            </div>
+          )}
+
         </div>
       </div>
 
-      <div className="card">
-        <div className="flex items-center gap-3 mb-4">
-          <div className="p-2 bg-orange-500/20 rounded-lg">
-            <Monitor className="w-6 h-6 text-orange-500" />
+      {/* Windows Node Agent Section */}
+      <div className="card" style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+        
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <div style={{ padding: '10px', background: 'rgba(0, 212, 255, 0.1)', border: '1px solid rgba(0, 212, 255, 0.2)', borderRadius: '8px', color: 'var(--accent-cyan)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <Monitor style={{ width: '24px', height: '24px' }} />
           </div>
           <div>
-            <h2 className="text-lg font-semibold">Windows Node Agent</h2>
-            <p className="text-slate-400 text-sm">Download & install agent di PC Windows</p>
-          </div>
-        </div>
-
-        <div className="bg-slate-700/50 rounded-lg p-4 border border-slate-600 mb-4">
-          <div className="flex items-center justify-between flex-wrap gap-4">
-            <div>
-              <h3 className="font-medium">PrintServer Client Agent</h3>
-              <p className="text-sm text-slate-400 mt-1">File .exe untuk Windows 64-bit</p>
-              <p className="text-xs text-slate-500 mt-1">Versi: 1.0.0 | Ukuran: ~38 MB</p>
-            </div>
-            <div className="flex flex-col gap-2">
-              <a
-                href="/downloads/agent"
-                className="btn-primary flex items-center gap-2"
-                download="PrintServer-Agent-1.0.0.exe"
-              >
-                <ExternalLink className="w-4 h-4" />
-                Download .exe
-              </a>
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-4 mb-4">
-          <div className="flex items-start gap-3">
-            <Info className="w-5 h-5 text-yellow-500 mt-0.5 flex-shrink-0" />
-            <div>
-              <p className="text-yellow-200 text-sm font-medium">Install di PC Windows:</p>
-              <ol className="text-yellow-100/70 text-sm mt-2 space-y-1">
-                <li>1. Download file .exe di atas</li>
-                <li>2. Jalankan installer sebagai Administrator</li>
-                <li>3. Masukkan Server URL: <code className="text-xs bg-slate-800 px-1 py-0.5 rounded">http://192.168.170.58:3000</code></li>
-                <li>4. Masukkan Node Secret (dari Settings page)</li>
-                <li>5. Klik Connect - agent akan muncul di dashboard</li>
-              </ol>
-            </div>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-4 text-sm text-slate-400 flex-wrap">
-          <div className="flex items-center gap-2">
-            <div className="w-2 h-2 rounded-full bg-green-500"></div>
-            <span>Windows 10/11 (64-bit)</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="w-2 h-2 rounded-full bg-green-500"></div>
-            <span>Node.js Runtime (included)</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="w-2 h-2 rounded-full bg-green-500"></div>
-            <span>Admin rights for service install</span>
-          </div>
-        </div>
-      </div>
-
-      <div className="card bg-gradient-to-r from-blue-900/30 to-purple-900/30 border border-blue-500/30">
-        <div className="flex items-center gap-4">
-          <div className="p-3 bg-blue-500/20 rounded-full">
-            <Monitor className="w-8 h-8 text-blue-400" />
-          </div>
-          <div className="flex-1">
-            <h3 className="font-semibold text-lg">Need More Help?</h3>
-            <p className="text-slate-400 text-sm">
-              Untuk informasi lebih lanjut tentang setup dan troubleshooting, silakan lihat dokumentasi atau hubungi administrator sistem.
+            <h2 style={{ fontSize: '18px', fontWeight: '600', color: 'var(--text-primary)', fontFamily: "'Rajdhani', sans-serif" }}>
+              Windows Node Agent
+            </h2>
+            <p style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
+              Download client agent untuk sinkronisasi printer lokal Windows
             </p>
           </div>
-          <a
-            href={`http://${serverInfo.ip}:${serverInfo.port}/help`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="btn-primary flex items-center gap-2"
-          >
-            <ExternalLink className="w-4 h-4" />
-            Documentation
-          </a>
         </div>
+
+        {/* Dynamic Binary Card Box */}
+        <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: '10px', padding: '20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '16px' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            <span style={{ fontSize: '16px', fontWeight: '600', color: 'var(--text-primary)' }}>
+              PrintServer Client Agent (.exe)
+            </span>
+            <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
+              Aplikasi WebSocket routing IPP background service untuk Windows 64-bit.
+            </span>
+            
+            {/* Version and Build details */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px', flexWrap: 'wrap' }}>
+              <span style={{ fontSize: '11px', fontFamily: "'Share Tech Mono', monospace", color: 'var(--accent-cyan)', background: 'rgba(0, 212, 255, 0.08)', border: '1px solid rgba(0, 212, 255, 0.2)', padding: '2px 8px', borderRadius: '4px' }}>
+                Versi: {agentVersion}
+              </span>
+              <span style={{ fontSize: '11px', fontFamily: "'Share Tech Mono', monospace", color: 'var(--text-muted)', background: 'rgba(74, 96, 128, 0.1)', padding: '2px 8px', borderRadius: '4px' }}>
+                Ukuran: {agentSize}
+              </span>
+              {agentBuildTime && (
+                <span style={{ fontSize: '11px', fontFamily: "'Share Tech Mono', monospace", color: 'var(--text-muted)' }}>
+                  Build: {formatBuildTime(agentBuildTime)}
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* Cyber Primary Download Actions */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', minWidth: '220px' }}>
+            <a
+              href="/downloads/agent"
+              download={`PrintServer-Agent-${agentVersion}.exe`}
+              style={hoveredEl === 'dl-exe' ? { ...cyberBtnStyle, ...cyberBtnHoverStyle } : cyberBtnStyle}
+              onMouseEnter={() => setHoveredEl('dl-exe')}
+              onMouseLeave={() => setHoveredEl(null)}
+            >
+              <Download style={{ width: '16px', height: '16px' }} />
+              <span>Download Agent (.exe)</span>
+            </a>
+            
+            <a
+              href="/downloads/add-printers.ps1"
+              download="add-all-printers.ps1"
+              style={hoveredEl === 'dl-ps1' ? { ...bulkBtnStyle, ...bulkBtnHoverStyle } : bulkBtnStyle}
+              onMouseEnter={() => setHoveredEl('dl-ps1')}
+              onMouseLeave={() => setHoveredEl(null)}
+              title="PowerShell script untuk add semua printer dari server secara bulk"
+            >
+              <ExternalLink style={{ width: '12px', height: '12px' }} />
+              <span>Bulk Add Printers (.ps1)</span>
+            </a>
+          </div>
+        </div>
+
+        {/* Info Installation Guide */}
+        <div style={{ background: 'rgba(245, 158, 11, 0.05)', border: '1px solid rgba(245, 158, 11, 0.2)', borderRadius: '8px', padding: '16px', display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
+          <Info style={{ width: '20px', height: '20px', color: 'var(--accent-amber)', flexShrink: 0, marginTop: '2px' }} />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            <span style={{ fontSize: '14px', fontWeight: '600', color: 'var(--accent-amber)', fontFamily: "'Rajdhani', sans-serif", textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+              Petunjuk Instalasi PC Windows:
+            </span>
+            <ol style={{ padding: 0, margin: '6px 0 0 0', listStyleType: 'none', display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '13px', color: 'rgba(255, 255, 255, 0.75)', lineHeight: '1.4' }}>
+              <li>1. Unduh berkas installer <code style={{ background: 'var(--bg-primary)', padding: '1px 4px', borderRadius: '3px', color: 'var(--accent-cyan)' }}>.exe</code> di atas.</li>
+              <li>2. Jalankan installer dengan klik kanan dan pilih <strong>Run as Administrator</strong>.</li>
+              <li>3. Saat diminta, masukkan URL Server: <code style={{ background: 'var(--bg-primary)', padding: '1px 4px', borderRadius: '3px', color: 'var(--accent-cyan)' }}>http://{serverInfo.ip}:{serverInfo.port}</code></li>
+              <li>4. Masukkan Node Secret (dapat ditemukan di halaman Settings).</li>
+              <li>5. Klik tombol <strong>Connect</strong> — Agent akan terdaftar dan aktif di dashboard Anda.</li>
+            </ol>
+          </div>
+        </div>
+
+        {/* Footer Technical Indicators */}
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '16px', fontSize: '12px', color: 'var(--text-muted)', borderTop: '1px solid var(--border)', paddingTop: '14px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: 'var(--accent-green)', boxShadow: 'var(--glow-green)' }} />
+            <span>Windows 10/11 (64-bit)</span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: 'var(--accent-green)', boxShadow: 'var(--glow-green)' }} />
+            <span>Node.js Embedded Runtime</span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: 'var(--accent-green)', boxShadow: 'var(--glow-green)' }} />
+            <span>Hak Akses Administrator diperlukan</span>
+          </div>
+        </div>
+
       </div>
+
+      {/* Cyber Documentation Help Card */}
+      <div style={{
+        background: 'linear-gradient(90deg, rgba(0, 212, 255, 0.04) 0%, rgba(139, 92, 246, 0.04) 100%)',
+        border: '1px solid rgba(0, 212, 255, 0.2)',
+        borderRadius: '12px',
+        padding: '24px',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        flexWrap: 'wrap',
+        gap: '20px'
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: '280px' }}>
+          <div style={{ padding: '12px', background: 'rgba(0, 212, 255, 0.1)', borderRadius: '50%', color: 'var(--accent-cyan)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <HelpCircle style={{ width: '28px', height: '28px' }} />
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            <h3 style={{ fontSize: '18px', fontWeight: '600', color: 'var(--text-primary)', fontFamily: "'Rajdhani', sans-serif" }}>
+              Butuh Bantuan Lebih Lanjut?
+            </h3>
+            <p style={{ fontSize: '13px', color: 'var(--text-muted)', lineHeight: '1.4' }}>
+              Untuk informasi lebih detail mengenai setup agent, pemecahan masalah (troubleshooting), dan panduan lengkap silakan pelajari dokumentasi resmi kami.
+            </p>
+          </div>
+        </div>
+        <a
+          href={`http://${serverInfo.ip}:${serverInfo.port}/help`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="btn-primary"
+          style={{
+            fontSize: '13px',
+            padding: '10px 18px',
+            textDecoration: 'none',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '8px'
+          }}
+        >
+          <ExternalLink style={{ width: '16px', height: '16px' }} />
+          <span>Documentation</span>
+        </a>
+      </div>
+
     </div>
   );
 }
+
+// Inline Styles for complex states
+const cyberBtnStyle: React.CSSProperties = {
+  background: 'linear-gradient(135deg, rgba(0, 212, 255, 0.12) 0%, rgba(0, 255, 136, 0.12) 100%)',
+  border: '1px solid var(--accent-cyan)',
+  boxShadow: 'var(--glow-cyan)',
+  color: '#ffffff',
+  padding: '12px 20px',
+  borderRadius: '8px',
+  fontFamily: "'Share Tech Mono', monospace",
+  fontWeight: 'bold',
+  fontSize: '13px',
+  textTransform: 'uppercase',
+  letterSpacing: '1px',
+  cursor: 'pointer',
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: '8px',
+  transition: 'all 0.3s ease',
+  textDecoration: 'none',
+};
+
+const cyberBtnHoverStyle: React.CSSProperties = {
+  background: 'linear-gradient(135deg, rgba(0, 212, 255, 0.25) 0%, rgba(0, 255, 136, 0.25) 100%)',
+  boxShadow: '0 0 15px rgba(0, 212, 255, 0.6)',
+  borderColor: '#ffffff',
+};
+
+const bulkBtnStyle: React.CSSProperties = {
+  background: 'rgba(74, 96, 128, 0.1)',
+  border: '1px solid var(--border)',
+  color: 'var(--text-primary)',
+  padding: '10px 16px',
+  borderRadius: '8px',
+  fontSize: '12px',
+  fontFamily: "'Rajdhani', sans-serif",
+  fontWeight: '600',
+  textTransform: 'uppercase',
+  letterSpacing: '1px',
+  cursor: 'pointer',
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: '6px',
+  transition: 'all 0.2s',
+  textDecoration: 'none',
+};
+
+const bulkBtnHoverStyle: React.CSSProperties = {
+  background: 'rgba(74, 96, 128, 0.2)',
+  borderColor: 'var(--accent-cyan)',
+};

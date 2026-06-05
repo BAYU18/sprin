@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { logger } from '../utils/logger.js';
 import { v4 as uuidv4 } from 'uuid';
 import { addPrintJob } from '../queues/index.js';
+import { generatePrinterSlug, ensureUniquePrinterSlug } from '../utils/printer-slug.js';
 
 const registerNodeSchema = z.object({
     node_name: z.string().min(3),
@@ -263,6 +264,9 @@ export async function setupDiscoveryRoutes(fastify: FastifyInstance) {
                     .update({ status: 'inactive' });
 
                 for (const printer of body.printers) {
+                    // Auto-generate slug from name for IPP routing
+                    const baseSlug = generatePrinterSlug(printer.name);
+
                     // Check if printer already exists
                     const existingPrinter = await fastify.knex('printers')
                         .where('name', printer.name)
@@ -270,7 +274,12 @@ export async function setupDiscoveryRoutes(fastify: FastifyInstance) {
                         .first();
 
                     if (existingPrinter) {
-                        // Update existing printer
+                        // Update existing printer — backfill slug if missing
+                        const slug = existingPrinter.slug || await ensureUniquePrinterSlug(
+                            fastify.knex,
+                            baseSlug,
+                            existingPrinter.id
+                        );
                         await fastify.knex('printers')
                             .where({ id: existingPrinter.id })
                             .update({
@@ -279,10 +288,12 @@ export async function setupDiscoveryRoutes(fastify: FastifyInstance) {
                                 type: printer.type,
                                 capabilities: JSON.stringify(printer.capabilities || {}),
                                 status: 'ready',
-                                last_updated: new Date()
+                                slug,
+                                updated_at: new Date()
                             });
                     } else {
-                        // Insert new printer
+                        // Insert new printer — ensure slug is unique
+                        const slug = await ensureUniquePrinterSlug(fastify.knex, baseSlug);
                         await fastify.knex('printers')
                             .insert({
                                 name: printer.name,
@@ -291,7 +302,9 @@ export async function setupDiscoveryRoutes(fastify: FastifyInstance) {
                                 type: printer.type || 'windows',
                                 capabilities: JSON.stringify(printer.capabilities || {}),
                                 node_id: node.id,
-                                status: 'ready'
+                                client_id: node.id,
+                                status: 'ready',
+                                slug
                             });
                     }
                 }

@@ -1,5 +1,15 @@
 import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { generatePrinterSlug, ensureUniquePrinterSlug } from '../utils/printer-slug.js';
+import { resolvePaperForPrinter, listPaperSizes } from '../services/paper-service.js';
+
+const paperConfigSchema = z.object({
+    size: z.string().min(1),
+    orientation: z.enum(['portrait', 'landscape']).optional(),
+    tray: z.string().optional(),
+    customWidthMm: z.number().min(1).max(2000).optional(),
+    customHeightMm: z.number().min(1).max(2000).optional(),
+}).strict();
 
 const printerSchema = z.object({
     name: z.string(),
@@ -17,13 +27,27 @@ const updatePrinterSchema = printerSchema.partial();
 
 export async function setupPrintersRoutes(fastify: FastifyInstance) {
     fastify.get('/', async (request, reply) => {
-        const printers = await fastify.knex('printers')
+        // Filter out soft-removed printers by default (auto-removed after
+        // 15 min offline). Admin can opt-in with ?include_removed=1 to see
+        // the full list including hidden ones (e.g. for cleanup UI).
+        const { include_removed } = request.query as any;
+        let q = fastify.knex('printers')
             .leftJoin('printer_groups', 'printers.group_id', 'printer_groups.id')
+            .leftJoin('clients', 'printers.client_id', 'clients.id')
+            .leftJoin('printer_drivers', 'printers.driver_id', 'printer_drivers.id')
             .select(
                 'printers.*',
-                'printer_groups.name as group_name'
+                'printer_groups.name as group_name',
+                'clients.hostname as client_hostname',
+                'clients.ip_address as client_ip',
+                'printer_drivers.name as driver_name',
+                'printer_drivers.manufacturer as driver_manufacturer',
+                'printer_drivers.is_builtin as driver_is_builtin'
             );
-
+        if (!include_removed || include_removed === '0' || include_removed === 'false') {
+            q = q.whereRaw("(printers.config->>'auto_removed') IS DISTINCT FROM 'true'");
+        }
+        const printers = await q;
         return printers;
     });
 
@@ -51,6 +75,45 @@ export async function setupPrintersRoutes(fastify: FastifyInstance) {
         return { ...printer, recentJobs, health };
     });
 
+    // GET /api/printers/removed — list soft-hidden printers (admin view)
+    // These are printers that were auto-removed after 15 min offline and
+    // are not currently visible in the main /api/printers list.
+    fastify.get('/removed', async (request, reply) => {
+        const removed = await fastify.knex('printers')
+            .leftJoin('clients', 'printers.client_id', 'clients.id')
+            .whereRaw("(printers.config->>'auto_removed') = 'true'")
+            .select(
+                'printers.*',
+                'clients.hostname as client_hostname',
+                'clients.ip_address as client_ip'
+            )
+            .orderBy('printers.updated_at', 'desc');
+        return { count: removed.length, printers: removed };
+    });
+
+    // POST /api/printers/:id/restore — manually un-hide a printer
+    // (e.g. admin wants to keep a printer visible even if it's offline)
+    fastify.post('/:id/restore', async (request, reply) => {
+        const { id } = request.params as { id: string };
+        const printerId = parseInt(id);
+        const printer = await fastify.knex('printers').where({ id: printerId }).first();
+        if (!printer) return reply.status(404).send({ error: 'Printer not found' });
+
+        const currentConfig = (printer.config as any) || {};
+        delete currentConfig.auto_removed;
+        delete currentConfig.auto_removed_at;
+
+        await fastify.knex('printers')
+            .where({ id: printerId })
+            .update({
+                config: Object.keys(currentConfig).length ? currentConfig : null,
+                status: 'offline',  // explicitly offline until next heartbeat
+                updated_at: new Date()
+            });
+
+        return { success: true, id: printerId };
+    });
+
     fastify.post('/', async (request, reply) => {
         const body = printerSchema.parse(request.body);
 
@@ -58,8 +121,11 @@ export async function setupPrintersRoutes(fastify: FastifyInstance) {
             await fastify.knex('printers').update({ is_default: false });
         }
 
+        // Auto-generate unique slug if not provided
+        const slug = await ensureUniquePrinterSlug(fastify.knex, generatePrinterSlug(body.name));
+
         const [printer] = await fastify.knex('printers')
-            .insert(body)
+            .insert({ ...body, slug })
             .returning('*');
 
         fastify.io?.emit('printer:created', printer);
@@ -138,5 +204,128 @@ export async function setupPrintersRoutes(fastify: FastifyInstance) {
             .count('* as count');
 
         return { jobs, total: count, page, limit };
+    });
+
+    // GET /api/printers/:id/paper — get resolved effective paper config
+    fastify.get('/:id/paper', async (request, reply) => {
+        const { id } = request.params as { id: string };
+        const printerId = parseInt(id);
+        const printer = await fastify.knex('printers').where({ id: printerId }).first();
+        if (!printer) return reply.status(404).send({ error: 'Printer not found' });
+
+        const effective = await resolvePaperForPrinter(fastify.knex, printerId);
+        const allSizes = await listPaperSizes(fastify.knex);
+        const override = (printer.config as any)?.paper as any | undefined;
+
+        return {
+            override: override || null,
+            effective,
+            availableSizes: allSizes,
+        };
+    });
+
+    // PUT /api/printers/:id/paper — set per-printer paper override
+    // body: PaperConfig (see paper-service.ts)
+    fastify.put('/:id/paper', async (request: any, reply) => {
+        const { id } = request.params as { id: string };
+        const printerId = parseInt(id);
+        const paper = paperConfigSchema.parse(request.body);
+
+        const printer = await fastify.knex('printers').where({ id: printerId }).first();
+        if (!printer) return reply.status(404).send({ error: 'Printer not found' });
+
+        // Validate the size name exists in the merged list
+        const all = await listPaperSizes(fastify.knex);
+        if (!all.find((p) => p.name === paper.size)) {
+            return reply.status(400).send({ error: `Unknown paper size: ${paper.size}` });
+        }
+
+        // Merge into config (preserve other config keys)
+        const currentConfig = (printer.config as any) || {};
+        const newConfig = { ...currentConfig, paper };
+
+    await fastify.knex('printers')
+        .where({ id: printerId })
+        .update({
+            config: newConfig,
+            updated_at: new Date()
+        });
+
+        // Return effective resolved config (so caller can see what will actually be used)
+        const effective = await resolvePaperForPrinter(fastify.knex, printerId);
+
+        return { override: paper, effective };
+    });
+
+    // DELETE /api/printers/:id/paper — clear per-printer paper override
+    fastify.delete('/:id/paper', async (request, reply) => {
+        const { id } = request.params as { id: string };
+        const printerId = parseInt(id);
+        const printer = await fastify.knex('printers').where({ id: printerId }).first();
+        if (!printer) return reply.status(404).send({ error: 'Printer not found' });
+
+        const currentConfig = (printer.config as any) || {};
+        delete currentConfig.paper;
+
+        await fastify.knex('printers')
+            .where({ id: printerId })
+            .update({
+                config: Object.keys(currentConfig).length ? currentConfig : null,
+                updated_at: new Date()
+            });
+
+        const effective = await resolvePaperForPrinter(fastify.knex, printerId);
+        return { override: null, effective };
+    });
+
+    // POST /api/printers/:id/test-print — submit a dummy test print job
+    fastify.post('/:id/test-print', async (request, reply) => {
+        const { id } = request.params as { id: string };
+        const printerId = parseInt(id);
+        const printer = await fastify.knex('printers').where({ id: printerId }).first();
+        if (!printer) return reply.status(404).send({ error: 'Printer not found' });
+
+        try {
+            const result = await fastify.printRouter.submitJob({
+                userId: 1,
+                clientId: printer.client_id || 1,
+                printerId: printerId,
+                filePath: 'assets/test-page.pdf',
+                fileName: 'TestPrintPage.pdf',
+                fileType: 'application/pdf',
+                copies: 1,
+                options: { isTestPage: true }
+            });
+            return { success: true, job: result };
+        } catch (error) {
+            return reply.status(400).send({ error: (error as Error).message });
+        }
+    });
+
+    // POST /api/printers/:id/clear-queue — cancel all active jobs for this printer
+    fastify.post('/:id/clear-queue', async (request, reply) => {
+        const { id } = request.params as { id: string };
+        const printerId = parseInt(id);
+        const printer = await fastify.knex('printers').where({ id: printerId }).first();
+        if (!printer) return reply.status(404).send({ error: 'Printer not found' });
+
+        const activeJobs = await fastify.knex('print_jobs')
+            .where({ printer_id: printerId })
+            .whereIn('status', ['waiting', 'queued', 'processing', 'printing']);
+
+        let cancelledCount = 0;
+        for (const job of activeJobs) {
+            try {
+                await fastify.printRouter.cancelJob(job.job_id);
+                cancelledCount++;
+            } catch (err) {
+                await fastify.knex('print_jobs').where({ id: job.id }).update({ status: 'cancelled' });
+                await fastify.knex('queues').where({ print_job_id: job.id }).delete();
+                cancelledCount++;
+            }
+        }
+
+        fastify.io?.emit('printer:queue-cleared', { printerId });
+        return { success: true, cancelledCount };
     });
 }

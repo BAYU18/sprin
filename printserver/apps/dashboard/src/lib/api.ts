@@ -50,6 +50,8 @@ export const printers = {
   delete: (id: number) => api.delete(`/api/printers/${id}`),
   status: (id: number) => api.get(`/api/printers/${id}/status`),
   jobs: (id: number, params?: any) => api.get(`/api/printers/${id}/jobs`, { params }),
+  testPrint: (id: number) => api.post(`/api/printers/${id}/test-print`),
+  clearQueue: (id: number) => api.post(`/api/printers/${id}/clear-queue`),
 };
 
 export const jobs = {
@@ -58,6 +60,8 @@ export const jobs = {
   submit: (data: any) => api.post('/api/jobs/submit', data),
   cancel: (jobId: string) => api.post(`/api/jobs/${jobId}/cancel`),
   retry: (jobId: string) => api.post(`/api/jobs/${jobId}/retry`),
+  hold: (jobId: string) => api.post(`/api/jobs/${jobId}/hold`),
+  release: (jobId: string) => api.post(`/api/jobs/${jobId}/release`),
   stats: {
     today: () => api.get('/api/jobs/stats/today'),
     week: () => api.get('/api/jobs/stats/week'),
@@ -103,6 +107,26 @@ export const settings = {
   get: () => api.get('/api/settings'),
   update: (data: any) => api.put('/api/settings', data),
   channels: () => api.get('/api/settings/notifications/channels'),
+  serverInfo: () => api.get('/api/settings/server-info'),
+};
+
+export const paper = {
+  list: () => api.get('/api/paper'),
+  getDefault: () => api.get('/api/paper/default'),
+  setDefault: (name: string) => api.put('/api/paper/default', { default: name }),
+  getCustom: () => api.get('/api/paper/custom'),
+  addCustom: (entry: { name: string; widthMm: number; heightMm: number }) =>
+    api.post('/api/paper/custom', entry),
+  removeCustom: (name: string) => api.delete(`/api/paper/custom/${encodeURIComponent(name)}`),
+  getForPrinter: (id: number) => api.get(`/api/printers/${id}/paper`),
+  setForPrinter: (id: number, paper: any) => api.put(`/api/printers/${id}/paper`, paper),
+  clearForPrinter: (id: number) => api.delete(`/api/printers/${id}/paper`),
+};
+
+export const badges = {
+  // Aggregated sidebar counts: alerts_unresolved, jobs_pending,
+  // printers_offline, clients_online, clients_total
+  get: () => api.get('/api/badges'),
 };
 
 export default api;

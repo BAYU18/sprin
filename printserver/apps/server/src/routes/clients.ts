@@ -1,5 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { generatePrinterSlug, ensureUniquePrinterSlug } from '../utils/printer-slug.js';
 
 const clientSchema = z.object({
     hostname: z.string().optional(),
@@ -122,8 +123,105 @@ export async function setupClientsRoutes(fastify: FastifyInstance) {
             .update({
                 is_online: status === 'online',
                 last_seen: new Date(),
-                metadata: JSON.stringify({ printers, jobs })
+                metadata: { printers, jobs }
             });
+
+        // Sync printer list from agent heartbeat
+        if (Array.isArray(printers)) {
+            const BUILTIN_PATTERNS = [
+                /^[\\/]{2}.*/i,
+                /microsoft print to pdf/i,
+                /microsoft xps document writer/i,
+                /onenote/i,
+                /^fax$/i,
+                /nitro pdf creator/i
+            ];
+
+            const isFiltered = (name) => {
+                if (!name || typeof name !== 'string') return true;
+                return BUILTIN_PATTERNS.some(re => re.test(name.trim()));
+            };
+
+            const printerNames = printers
+                .map((p: any) => (typeof p === 'string' ? p : p?.name))
+                .filter((n: any) => typeof n === 'string' && !isFiltered(n))
+                .map((n: string) => n.trim());
+
+            const seen = new Set<string>();
+            for (const name of printerNames) {
+                const trimmed = name.trim();
+                const key = trimmed.toLowerCase();
+                if (seen.has(key)) continue;
+                seen.add(key);
+
+                const existing = await fastify.knex('printers')
+                    .where({ client_id: id })
+                    .whereRaw('LOWER(name) = ?', [key])
+                    .first();
+
+                if (existing) {
+                    // Backfill slug if missing (older records before slug column was added)
+                    const slug = existing.slug || await ensureUniquePrinterSlug(
+                        fastify.knex,
+                        generatePrinterSlug(trimmed),
+                        existing.id
+                    );
+
+                    // If the printer was previously auto-hidden (15 min offline
+                    // rule), restore it now that the node is reporting it again.
+                    const wasRemoved = (existing.config as any)?.auto_removed === 'true';
+                    const existingConfig = (existing.config as any) || {};
+                    if (wasRemoved) {
+                        delete existingConfig.auto_removed;
+                        delete existingConfig.auto_removed_at;
+                        existingConfig.restored_at = new Date().toISOString();
+                    }
+
+                    const updatePayload: any = {
+                        status: status === 'online' ? 'online' : 'offline',
+                        slug,
+                        updated_at: new Date()
+                    };
+                    if (wasRemoved) {
+                        updatePayload.config = Object.keys(existingConfig).length
+                            ? existingConfig : null;
+                    }
+
+                    await fastify.knex('printers')
+                        .where({ id: existing.id })
+                        .update(updatePayload);
+
+                    if (wasRemoved) {
+                        logger.info(`[Heartbeat] Restored auto-removed printer "${trimmed}" (id=${existing.id}) — node back online`);
+                    }
+                } else {
+                    // Auto-generate unique slug for new printer
+                    const slug = await ensureUniquePrinterSlug(
+                        fastify.knex,
+                        generatePrinterSlug(trimmed)
+                    );
+                    await fastify.knex('printers')
+                        .insert({
+                            name: trimmed,
+                            driver: 'Unknown',
+                            port: 'NODE',
+                            type: 'network',
+                            is_shared: true,
+                            status: status === 'online' ? 'online' : 'offline',
+                            client_id: id,
+                            slug,
+                            created_at: new Date(),
+                            updated_at: new Date()
+                        });
+                }
+            }
+
+            // Mark printers no longer reported as offline
+            await fastify.knex('printers')
+                .where({ client_id: id })
+                .whereNotIn('name', printerNames.map((n: string) => n.trim()))
+                .update({ status: 'offline', updated_at: new Date() });
+        }
 
         if (status === 'online') {
             fastify.io?.emit('client:heartbeat', { clientId: parseInt(id), status, printers });

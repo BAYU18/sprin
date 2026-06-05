@@ -18,6 +18,8 @@ const { exec, spawn } = require('child_process');
 const { promisify } = require('util');
 const { EventEmitter } = require('events');
 
+const { AutoUpdater, CURRENT_VERSION: AGENT_VERSION } = require('./updater.js');
+
 // Try to load optional dependencies
 let chokidar, axios, uuid, log, FormData;
 try {
@@ -205,6 +207,10 @@ class PrinterScanner {
   getAll() {
     return this.printers;
   }
+
+  getPrinters() {
+    return this.printers;
+  }
 }
 
 // ─── Spool Watcher ────────────────────────────────────────────────────────────
@@ -348,11 +354,20 @@ class JobExecutor {
     logger.info('Executing print job', { jobId: job.id, printer: job.printer, file: job.filePath });
 
     try {
-      // Try SumatraPDF first (best for silent printing)
-      if (this.sumatraPDFPath && fs.existsSync(job.filePath)) {
+      const paper = job.paper || null; // { size, orientation, tray, customWidthMm, customHeightMm }
+
+      // Try SumatraPDF first (best for silent printing). SumatraPDF only
+      // supports predefined paper names (A4/Letter/etc) — for custom sizes
+      // we fall through to the PowerShell path which can set PaperSize by
+      // exact millimetre dimensions.
+      const sumatraSupportsCustom = false;
+      if (this.sumatraPDFPath && fs.existsSync(job.filePath)
+          && (!paper || this.isSumatraBuiltin(paper.size))) {
         const printerArg = job.printer ? `-printer "${job.printer}"` : '';
-        const cmd = `"${this.sumatraPDFPath}" -print-to ${printerArg} "${job.filePath}"`;
-        
+        const paperArg = paper ? `-paper "${this.mapSumatraPaper(paper.size)}"` : '';
+        const settingsArg = paper && paper.orientation === 'landscape' ? '-landscape' : '';
+        const cmd = `"${this.sumatraPDFPath}" -print-to ${printerArg} ${paperArg} ${settingsArg} "${job.filePath}"`;
+
         await new Promise((resolve, reject) => {
           exec(cmd, { shell: true }, (err, stdout, stderr) => {
             if (err) reject(err);
@@ -360,19 +375,19 @@ class JobExecutor {
           });
         });
 
-        logger.info('Job printed via SumatraPDF', { jobId: job.id });
-        return { success: true, method: 'sumatra' };
+        logger.info('Job printed via SumatraPDF', { jobId: job.id, paper: paper?.size });
+        return { success: true, method: 'sumatra', paper: paper?.size };
       }
 
-      // Fallback: PowerShell Print Document
+      // PowerShell path: supports exact custom dimensions via .NET PaperSize
       if (job.printer) {
-        const psCmd = `Start-Process -FilePath "${job.filePath}" -Verb Print -WindowStyle Hidden`;
+        const psCmd = this.buildPowerShellPrintScript(job.filePath, job.printer, paper);
         await execPS(psCmd);
-        logger.info('Job sent via PowerShell', { jobId: job.id });
-        return { success: true, method: 'powershell' };
+        logger.info('Job sent via PowerShell', { jobId: job.id, paper: paper?.size });
+        return { success: true, method: 'powershell', paper: paper?.size };
       }
 
-      // Last resort: default printer
+      // Last resort: default printer (no paper config applied)
       const psCmd = `Get-ChildItem "${path.dirname(job.filePath)}" -Filter "${path.basename(job.filePath)}" | ForEach-Object { Start-Process $_.FullName -Verb Print }`;
       await execPS(psCmd);
       return { success: true, method: 'default' };
@@ -381,6 +396,102 @@ class JobExecutor {
       logger.error('Job execution failed', { jobId: job.id, error: err.message });
       return { success: false, error: err.message };
     }
+  }
+
+  // Built-in names that SumatraPDF recognizes on its -paper flag
+  isSumatraBuiltin(size) {
+    if (!size) return true;
+    const builtin = ['A2','A3','A4','A5','A6','Letter','Legal','Tabloid',
+                     'Executive','Statement','B4','B5','Folio','F4','Custom'];
+    return builtin.includes(size) || /^\d/.test(size); // numeric page-size also accepted
+  }
+
+  // Map our size name to SumatraPDF's expected name (mostly identity)
+  mapSumatraPaper(size) {
+    const map = { 'F4': 'Folio' }; // Sumatra uses "Folio" not "F4"
+    return map[size] || size;
+  }
+
+  // Build a PowerShell script that prints a file to a specific printer with
+  // a specific paper size. For .NET PaperSize, the dimensions must be in
+  // 1/100 inch units (1mm = 3.937 1/100-inch).
+  buildPowerShellPrintScript(filePath, printerName, paper) {
+    const escPath = filePath.replace(/'/g, "''");
+    const escPrinter = printerName.replace(/'/g, "''");
+
+    // If no paper config, use printer default
+    if (!paper || !paper.size) {
+      return `Start-Process -FilePath '${escPath}' -Verb PrintTo -ArgumentList '${escPrinter}' -WindowStyle Hidden`;
+    }
+
+    // mm -> 1/100 inch
+    const widthMm = paper.customWidthMm || this.builtinWidth(paper.size);
+    const heightMm = paper.customHeightMm || this.builtinHeight(paper.size);
+    const widthHi = widthMm ? Math.round((widthMm / 25.4) * 100) : null;
+    const heightHi = heightMm ? Math.round((heightMm / 25.4) * 100) : null;
+    const landscape = paper.orientation === 'landscape';
+
+    if (!widthHi || !heightHi) {
+      // Fall back to size name lookup
+      return `
+Add-Type -AssemblyName System.Drawing
+$printDoc = New-Object System.Drawing.Printing.PrintDocument
+$printDoc.PrinterSettings.PrinterName = '${escPrinter}'
+$paperName = '${paper.size.replace(/'/g, "''")}'
+try {
+  $ps = [System.Drawing.Printing.PrinterSettings]::InstalledPrinters |
+    ForEach-Object { $_.ToString() } | Where-Object { $_ -eq $printDoc.PrinterSettings.PrinterName } | Select-Object -First 1
+  $sizes = $printDoc.PrinterSettings.PaperSizes | Where-Object { $_.PaperName -eq $paperName }
+  if ($sizes) { $printDoc.DefaultPageSettings.PaperSize = $sizes[0] }
+} catch { }
+$printDoc.DocumentName = [System.IO.Path]::GetFileName('${escPath}')
+$printDoc.Print()
+$printDoc.Dispose()
+`;
+    }
+
+    return `
+Add-Type -AssemblyName System.Drawing
+$printDoc = New-Object System.Drawing.Printing.PrintDocument
+$printDoc.PrinterSettings.PrinterName = '${escPrinter}'
+
+# Custom paper size: ${paper.size} (${widthMm}x${heightMm}mm)
+$customW = ${widthHi}    # 1/100 inch
+$customH = ${heightHi}
+$isLandscape = $${landscape}
+
+# Find or create matching PaperSize
+$existing = $printDoc.PrinterSettings.PaperSizes | Where-Object {
+  $_.Width -eq $customW -and $_.Height -eq $customH
+} | Select-Object -First 1
+
+if ($existing) {
+  $printDoc.DefaultPageSettings.PaperSize = $existing
+} else {
+  $customPaper = New-Object System.Drawing.Printing.PaperSize('${paper.size.replace(/'/g, "''")}', $customW, $customH)
+  $printDoc.DefaultPageSettings.PaperSize = $customPaper
+}
+
+if ($isLandscape) { $printDoc.DefaultPageSettings.Landscape = $true }
+
+$printDoc.DocumentName = [System.IO.Path]::GetFileName('${escPath}')
+$printDoc.Print()
+$printDoc.Dispose()
+`;
+  }
+
+  // Built-in paper dimensions (mm). Mirrors server/paper-service.ts.
+  builtinWidth(name) {
+    const m = { 'A3':297,'A4':210,'A5':148,'A6':105,'B4':257,'B5':182,
+                'Letter':215.9,'Legal':215.9,'Tabloid':279.4,'Executive':184.15,
+                'Folio':210,'F4':215.9,'Statement':139.7 };
+    return m[name] || null;
+  }
+  builtinHeight(name) {
+    const m = { 'A3':420,'A4':297,'A5':210,'A6':148,'B4':364,'B5':257,
+                'Letter':279.4,'Legal':355.6,'Tabloid':431.8,'Executive':266.7,
+                'Folio':330,'F4':330.2,'Statement':215.9 };
+    return m[name] || null;
   }
 
   async listPrinters() {
@@ -406,7 +517,7 @@ class APIClient {
         ip_address: nodeInfo.ip_address || null,
         mac_address: nodeInfo.mac_address || null,
         os_version: `${os.platform()} ${os.release()}`.trim(),
-        client_version: '1.0.0'
+        client_version: AGENT_VERSION
       }, { timeout: 10000 });
 
       if (response.data?.id) {
@@ -422,14 +533,13 @@ class APIClient {
     }
   }
 
-  async heartbeat() {
+  async heartbeat(printers = []) {
     if (!this.clientId) return;
 
     try {
-      const printerList = this.printerScanner.getPrinters().map(p => p.name);
       await axios.post(`${this.baseUrl}/api/clients/${this.clientId}/heartbeat`, {
         status: 'online',
-        printers: printerList,
+        printers,
         jobsInQueue: 0,
         timestamp: new Date().toISOString()
       }, { timeout: 5000 });
@@ -477,36 +587,128 @@ class APIClient {
   }
 }
 
-// ─── WebSocket Client ─────────────────────────────────────────────────────────
+// ─── WebSocket Client (Socket.IO) ─────────────────────────────────────────────
 
 class WebSocketClient extends EventEmitter {
   constructor(url) {
     super();
-    this.url = url.replace('http', 'ws') + '/socket.io/?EIO=4&transport=websocket';
+    this.url = url;
     this.connected = false;
-    this.client = null;
+    this.socket = null;
+    this.reconnectTimer = null;
+    this.executor = null; // injected from PrintServerAgent
+  }
+
+  setExecutor(executor) {
+    this.executor = executor;
   }
 
   connect() {
     try {
-      // Using socket.io-client would be ideal here
-      // For lightweight fallback, we use polling
-      this.startPolling();
+      const { io } = require('socket.io-client');
+      this.socket = io(this.url, {
+        transports: ['websocket'],
+        reconnection: true,
+        reconnectionDelay: 1000,
+        reconnectionDelayMax: 10000,
+        timeout: 10000
+      });
+
+      this.socket.on('connect', () => {
+        this.connected = true;
+        logger.info('WebSocket connected to server');
+        // Register with server so it can route print jobs to us
+        if (this.clientId) {
+          this.socket.emit('register', { clientId: this.clientId, hostname: this.hostname });
+        }
+        this.emit('connected');
+      });
+
+      this.socket.on('disconnect', (reason) => {
+        this.connected = false;
+        logger.warn('WebSocket disconnected', { reason });
+        this.emit('disconnected', reason);
+      });
+
+      this.socket.on('connect_error', (err) => {
+        logger.warn('WebSocket connect error', { error: err.message });
+      });
+
+      // Server pushes a print job for one of our printers
+      this.socket.on('print:execute', async (data) => {
+        await this.handlePrintJob(data);
+      });
     } catch (err) {
-      logger.error('WebSocket connect failed, using polling fallback', { error: err.message });
+      logger.error('WebSocket connect failed', { error: err.message });
     }
   }
 
-  startPolling() {
-    logger.info('Using polling mode for server communication');
-    this.pollInterval = setInterval(() => {
-      // Polling handled externally via APIClient
-    }, 5000);
+  setClient(clientId, hostname) {
+    this.clientId = clientId;
+    this.hostname = hostname;
+    if (this.socket && this.connected) {
+      this.socket.emit('register', { clientId, hostname });
+    }
+  }
+
+  async handlePrintJob(data) {
+    const { jobId, printerName, fileName, copies, fileData, fileType, tempDir, paper } = data || {};
+    if (!jobId) {
+      logger.warn('print:execute missing jobId', { data });
+      return;
+    }
+
+    logger.info('Received print job via WebSocket', { jobId, printerName, fileName, copies, fileType });
+
+    try {
+      // Decode base64 file data and write to temp file
+      const dir = tempDir || path.join(process.env.TEMP || process.env.TMP || 'C:\\Windows\\Temp', 'printserver-spool');
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      const safeName = (fileName || `job-${jobId}`).replace(/[^a-zA-Z0-9._-]/g, '_');
+      const filePath = path.join(dir, `${Date.now()}_${safeName}`);
+      const buffer = Buffer.from(fileData || '', 'base64');
+      fs.writeFileSync(filePath, buffer);
+
+      // Execute the print job
+      const result = this.executor
+        ? await this.executor.execute({
+            id: jobId,
+            printer: printerName,
+            filePath,
+            fileName,
+            fileType,
+            copies: copies || 1,
+            paper: paper || null,  // { size, orientation, customWidthMm, customHeightMm, tray } | null
+          })
+        : { success: false, error: 'no executor configured' };
+
+      // Cleanup spool file
+      try { fs.unlinkSync(filePath); } catch (e) { /* ignore */ }
+
+      // Send result back to server
+      this.socket?.emit('print:result', {
+        jobId,
+        success: result.success,
+        method: result.method,
+        error: result.error
+      });
+
+      logger.info('Print job complete', { jobId, ...result });
+    } catch (err) {
+      logger.error('Print job execution failed', { jobId, error: err.message });
+      this.socket?.emit('print:result', {
+        jobId,
+        success: false,
+        error: err.message
+      });
+    }
   }
 
   disconnect() {
-    if (this.pollInterval) clearInterval(this.pollInterval);
-    this.connected = false;
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    if (this.socket) this.socket.disconnect();
   }
 }
 
@@ -568,6 +770,8 @@ class PrintServerAgent {
     this.printerScanner = new PrinterScanner();
     this.jobExecutor = new JobExecutor();
     this.apiClient = new APIClient(this.config.get('serverUrl'));
+    this.wsClient = new WebSocketClient(this.config.get('serverUrl'));
+    this.wsClient.setExecutor(this.jobExecutor);
     this.spoolWatcher = null;
     this.running = false;
     this.clientId = null;
@@ -575,7 +779,7 @@ class PrintServerAgent {
 
   async start() {
     logger.info('╔══════════════════════════════════════╗');
-    logger.info('║   PrintServer Node Agent v1.0.0      ║');
+    logger.info(`║   PrintServer Node Agent v${AGENT_VERSION}      ║`);
     logger.info('╚══════════════════════════════════════╝');
     logger.info('Starting PrintServer Node Agent...');
 
@@ -625,7 +829,7 @@ class PrintServerAgent {
         ip_address: addrs[0] || null,
         mac_address: null,
         os_version: os.platform() + ' ' + os.release(),
-        client_version: '1.0.0'
+        client_version: AGENT_VERSION
       };
 
       const result = await this.apiClient.register(nodeInfo);
@@ -637,6 +841,10 @@ class PrintServerAgent {
           this.config.set('secretKey', result.nodeSecret);
         }
         logger.info('Node registered successfully', { clientId: this.clientId });
+
+        // Connect WebSocket for receiving print jobs from server (IPP → node)
+        this.wsClient.setClient(this.clientId, os.hostname());
+        this.wsClient.connect();
       }
     } catch (err) {
       logger.error('Failed to register with server', { error: err.message });
@@ -646,16 +854,40 @@ class PrintServerAgent {
 
   startHeartbeat() {
     const interval = this.config.get('checkInterval') || 10000;
-    
+
+    const BUILTIN_PRINTERS = [
+      'microsoft print to pdf',
+      'microsoft xps document writer',
+      'onenote',
+      'fax',
+      'nitro pdf creator'
+    ];
+
+    const isNetworkShare = (name) => /^\\\\/.test((name || '').trim());
+    const isBuiltin = (name) => {
+      const lower = (name || '').toLowerCase();
+      return BUILTIN_PRINTERS.some(b => lower.includes(b));
+    };
+
     this.heartbeatTimer = setInterval(async () => {
       if (!this.clientId) {
         await this.registerWithServer();
       } else {
-        await this.apiClient.heartbeat();
-      }
+        // Periodically refresh printer list
+        await this.printerScanner.scan();
 
-      // Periodically refresh printer list
-      await this.printerScanner.scan();
+        const printerList = (this.printerScanner.printers || [])
+          .filter(p => p.name && !isNetworkShare(p.name) && !isBuiltin(p.name))
+          .map(p => ({
+            name: p.name,
+            status: p.status === 'online' ? 'online' : 'offline',
+            port: p.port || 'UNKNOWN',
+            type: p.type || 'local',
+            jobs_in_queue: 0
+          }));
+
+        await this.apiClient.heartbeat(printerList);
+      }
     }, interval);
 
     logger.info(`Heartbeat started (interval: ${interval}ms)`);
@@ -736,6 +968,27 @@ function main() {
     console.error('Failed to start agent:', err);
     process.exit(1);
   });
+
+  // Start auto-updater (no-op when running unpackaged / no serverUrl)
+  const updater = new AutoUpdater({
+    serverUrl: DEFAULT_CONFIG.serverUrl,
+    log: (level, msg, data) => {
+      if (data !== undefined) {
+        (logger[level] || logger.info).call(logger, msg, data);
+      } else {
+        (logger[level] || logger.info).call(logger, msg);
+      }
+    }
+  });
+  updater.start();
+
+  // Graceful shutdown — stop the updater timer
+  const cleanup = () => {
+    updater.stop();
+    process.exit(0);
+  };
+  process.on('SIGINT', cleanup);
+  process.on('SIGTERM', cleanup);
 }
 
 main();

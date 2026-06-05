@@ -1,6 +1,6 @@
 {
   "name": "@printserver/node-agent",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "description": "PrintServer Node Agent - Lightweight print client for Windows",
   "main": "src/index.js",
   "scripts": {
@@ -10,18 +10,21 @@
     "pack": "pkg --targets node18-win-x64 -o dist/printserver-agent.exe src/index.js"
   },
   "dependencies": {
-    "chokidar": "^3.6.0",
     "axios": "^1.6.8",
-    "uuid": "^9.0.1",
+    "chokidar": "^3.6.0",
     "electron-log": "^5.1.1",
     "form-data": "^4.0.0",
-    "picocolors": "^1.0.1"
+    "picocolors": "^1.0.1",
+    "socket.io-client": "^4.7.4",
+    "uuid": "^9.0.1"
   },
   "devDependencies": {
     "pkg": "^5.8.1"
   },
   "pkg": {
-    "targets": ["node18-win-x64"],
+    "targets": [
+      "node18-win-x64"
+    ],
     "outputPath": "dist",
     "assets": [],
     "resources": [

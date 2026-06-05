@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
@@ -16,8 +17,9 @@ import { setupMetrics } from './services/metrics.js';
 import { logger } from './utils/logger.js';
 import { PrintRouter } from './printer-engine/router.js';
 import { CentralPrintRouter } from './services/centralRouter.js';
-import { autoHealScheduler } from './services/autoheal.js';
+import { autoHealScheduler, startAutoClearOffline } from './services/autoheal.js';
 import { NodeHeartbeatService } from './services/node-heartbeat.js';
+import { IPPServer } from './services/ipp-server.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -71,6 +73,23 @@ async function buildServer() {
     await setupSocketIO(fastify);
     await setupMetrics(fastify);
 
+    // Initialize IPP server (port 631) for Windows printer sharing
+    const ippServer = new IPPServer({
+        getKnex: () => fastify.knex,
+        getIO: () => fastify.io
+    });
+    await ippServer.start();
+    fastify.decorate('ippServer', ippServer);
+
+    // Wire socket.io to receive print:result from agents
+    if (fastify.io) {
+        fastify.io.on('connection', (socket: any) => {
+            socket.on('print:result', (data: any) => {
+                ippServer.handleAgentResult(data);
+            });
+        });
+    }
+
     const printRouter = new PrintRouter(fastify);
     logger.info('About to initialize PrintRouter...');
     await printRouter.initialize();
@@ -104,11 +123,24 @@ async function buildServer() {
 }
 
 async function start() {
+    // Global safety net: never let async errors crash the server silently
+    process.on('unhandledRejection', (reason) => {
+        logger.error(`[unhandledRejection] ${(reason as Error)?.message || reason}`);
+        if (reason instanceof Error && reason.stack) {
+            logger.error(reason.stack);
+        }
+    });
+    process.on('uncaughtException', (err) => {
+        logger.error(`[uncaughtException] ${err.message}`);
+        if (err.stack) logger.error(err.stack);
+    });
+
     try {
         const fastify = await buildServer();
 
         if (IS_CENTRAL) {
             await autoHealScheduler(fastify);
+            startAutoClearOffline(fastify);
         }
 
         if (IS_NODE) {

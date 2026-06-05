@@ -1,0 +1,15 @@
+# ═══ Quick Add (per-printer, uses driver from server catalog) ═══
+# Bulk script:  http://192.168.1.141:3001/downloads/add-all-printers.ps1
+# Universal:    http://192.168.1.141:3001/downloads/quick-add-universal.ps1
+# Drivers mgmt: http://192.168.1.141:3001/drivers
+#
+# Per-printer copy-paste (uses assigned driver from PrintServer catalog):
+# If no driver assigned, defaults to 'Generic / Text Only'
+# Note: driver must be installed on target Windows first!
+
+Add-Printer -Name "Printers" -DriverName "Generic / Text Only" -PortName "ipp://192.168.1.141:631/printers/printers"  # unassigned - using fallback
+Add-Printer -Name "EPSON LX-310 ESC/P (Copy 1)" -DriverName "EPSON LX-310 ESC/P" -PortName "ipp://192.168.1.141:631/printers/epson-lx-310-esc-p-copy-1"  # NOTE: 'EPSON LX-310 ESC/P' must be installed on target Windows
+Add-Printer -Name "EPSON L3210 Series" -DriverName "EPSON L3210 Series" -PortName "ipp://192.168.1.141:631/printers/epson-l3210-series"  # NOTE: 'EPSON L3210 Series' must be installed on target Windows
+Add-Printer -Name "EPSON L3110 Series (Copy 1)" -DriverName "EPSON L3110 Series" -PortName "ipp://192.168.1.141:631/printers/epson-l3110-series-copy-1"  # NOTE: 'EPSON L3110 Series' must be installed on target Windows
+Add-Printer -Name "EPSON L3110 Series" -DriverName "EPSON L3110 Series" -PortName "ipp://192.168.1.141:631/printers/epson-l3110-series"  # NOTE: 'EPSON L3110 Series' must be installed on target Windows
+Add-Printer -Name "Printers" -DriverName "Generic / Text Only" -PortName "ipp://192.168.1.141:631/printers/printers-2"

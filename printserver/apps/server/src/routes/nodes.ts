@@ -1,5 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { generatePrinterSlug, ensureUniquePrinterSlug } from '../utils/printer-slug.js';
 
 const heartbeatSchema = z.object({
     printers: z.array(z.object({
@@ -91,16 +92,30 @@ async function syncPrintersFromNode(knex: any, nodeId: number, printers: any[], 
 
         if (existing) {
             if (forceSync) {
+                // Backfill slug if missing
+                const slug = existing.slug || await ensureUniquePrinterSlug(
+                    knex,
+                    generatePrinterSlug(printer.name),
+                    existing.id
+                );
                 await knex('printers')
                     .where({ id: existing.id })
-                    .update(printerData);
+                    .update({
+                        ...printerData,
+                        slug
+                    });
                 logger.debug(`[Nodes] Printer updated: ${printer.name}`);
             }
         } else {
+            // Auto-generate unique slug
+            const slug = await ensureUniquePrinterSlug(knex, generatePrinterSlug(printer.name));
             const [created] = await knex('printers')
-                .insert(printerData)
+                .insert({
+                    ...printerData,
+                    slug
+                })
                 .returning('*');
-            logger.debug(`[Nodes] Printer created: ${printer.name}`);
+            logger.debug(`[Nodes] Printer created: ${printer.name} (slug=${slug})`);
         }
     }
 }
@@ -201,16 +216,16 @@ export async function setupNodesRoutes(fastify: FastifyInstance) {
             .update({
                 is_online: true,
                 last_heartbeat: new Date(),
-                printer_stats: JSON.stringify({
+                printer_stats: {
                     printers_online: stats.printers_online,
                     printers_offline: stats.printers_offline,
                     jobs_in_queue: stats.jobs_in_queue,
                     printer_count: printers.length
-                }),
-                system_stats: JSON.stringify({
+                },
+                system_stats: {
                     cpu_usage: stats.cpu_usage,
                     memory_usage: stats.memory_usage
-                }),
+                },
                 node_version: payload.version || node.node_version
             });
 
@@ -271,10 +286,10 @@ export async function setupNodesRoutes(fastify: FastifyInstance) {
             .where({ id })
             .update({
                 last_heartbeat: new Date(),
-                metadata: JSON.stringify({
+                metadata: {
                     last_printer_sync: new Date().toISOString(),
                     printer_count: printers.length
-                })
+                }
             });
 
         fastify.io?.emit('node:printers-updated', {

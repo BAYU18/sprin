@@ -121,6 +121,26 @@ export async function setupJobsRoutes(fastify: FastifyInstance) {
         }
     });
 
+    fastify.post('/:jobId/hold', async (request, reply) => {
+        const { jobId } = request.params as { jobId: string };
+        try {
+            const result = await fastify.printRouter.holdJob(jobId);
+            return result;
+        } catch (error) {
+            return reply.status(400).send({ error: (error as Error).message });
+        }
+    });
+
+    fastify.post('/:jobId/release', async (request, reply) => {
+        const { jobId } = request.params as { jobId: string };
+        try {
+            const result = await fastify.printRouter.releaseJob(jobId);
+            return result;
+        } catch (error) {
+            return reply.status(400).send({ error: (error as Error).message });
+        }
+    });
+
     fastify.post('/:jobId/retry', async (request, reply) => {
         const { jobId } = request.params as { jobId: string };
 

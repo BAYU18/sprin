@@ -75,34 +75,45 @@ export class CentralPrintRouter {
      */
     async refreshNodeCache(): Promise<void> {
         try {
-            const nodes = await this.fastify.knex('nodes')
-                .where('status', 'online');
+            // Kita ambil data dari tabel clients yang memiliki is_online = true
+            const nodes = await this.fastify.knex('clients')
+                .where('is_online', true);
 
             this.nodeCache.clear();
             this.nodeClients.clear();
 
             for (const node of nodes) {
-                this.nodeCache.set(node.id, {
-                    id: node.id,
-                    node_name: node.node_name,
-                    api_url: node.api_url,
-                    status: node.status,
-                    last_heartbeat: node.last_heartbeat
+                // Gunakan id client sebagai id node
+                const nodeId = node.id;
+                const nodeName = node.hostname || `client-${nodeId}`;
+
+                // Central hub berkomunikasi dengan client-agent menggunakan api_url.
+                // Jika client-agent tidak mengirim api_url secara eksplisit, kita buat url defaultnya
+                // (karena agent biasanya berjalan di port 3000 atau port lain pada IP client)
+                const port = 3000; // default agent port
+                const apiUrl = node.metadata?.api_url || `http://${node.ip_address || '127.0.0.1'}:${port}`;
+
+                this.nodeCache.set(nodeId, {
+                    id: nodeId,
+                    node_name: nodeName,
+                    api_url: apiUrl,
+                    status: 'online',
+                    last_heartbeat: node.last_seen
                 });
 
                 // Create axios client for this node
                 const client = axios.create({
-                    baseURL: node.api_url,
+                    baseURL: apiUrl,
                     timeout: 60000, // 1 minute timeout for print jobs
                     headers: {
                         'X-Node-Secret': node.secret_key
                     }
                 });
 
-                this.nodeClients.set(node.id, client);
+                this.nodeClients.set(nodeId, client);
             }
 
-            logger.info(`[CentralRouter] Cached ${nodes.length} online nodes`);
+            logger.info(`[CentralRouter] Cached ${nodes.length} online nodes from clients table`);
         } catch (error) {
             logger.error('[CentralRouter] Failed to refresh node cache:', error);
         }
@@ -113,18 +124,20 @@ export class CentralPrintRouter {
      */
     async refreshPrinterNodeMapping(): Promise<void> {
         try {
+            // Di schema printer, node diwakili oleh client_id.
+            // Kita map printers ke client_id-nya (sebagai pengganti node_id).
             const printers = await this.fastify.knex('printers')
-                .whereNotNull('node_id')
+                .whereNotNull('client_id')
                 .where('status', '!=', 'inactive')
-                .select('id', 'node_id');
+                .select('id', 'client_id');
 
             this.printerToNodeCache.clear();
 
             for (const printer of printers) {
-                this.printerToNodeCache.set(printer.id, printer.node_id);
+                this.printerToNodeCache.set(printer.id, printer.client_id);
             }
 
-            logger.info(`[CentralRouter] Mapped ${printers.length} printers to nodes`);
+            logger.info(`[CentralRouter] Mapped ${printers.length} printers to client nodes`);
         } catch (error) {
             logger.error('[CentralRouter] Failed to refresh printer mapping:', error);
         }
@@ -168,8 +181,8 @@ export class CentralPrintRouter {
             return null;
         }
 
-        const backupNode = await this.fastify.knex('nodes')
-            .where('status', 'online')
+        const backupNode = await this.fastify.knex('clients')
+            .where('is_online', true)
             .where('id', '!=', originalNodeId)
             .first();
 
@@ -180,17 +193,20 @@ export class CentralPrintRouter {
 
         const backupPrinter = await this.fastify.knex('printers')
             .where('name', printer.name)
-            .where('node_id', backupNode.id)
+            .where('client_id', backupNode.id)
             .where('status', '!=', 'inactive')
             .first();
 
         if (!backupPrinter) {
-            logger.warn(`[CentralRouter] No backup printer with name ${printer.name} found on node ${backupNode.node_name}`);
+            logger.warn(`[CentralRouter] No backup printer with name ${printer.name} found on node ${backupNode.hostname || backupNode.id}`);
             return null;
         }
 
+        const port = 3000;
+        const apiUrl = backupNode.metadata?.api_url || `http://${backupNode.ip_address || '127.0.0.1'}:${port}`;
+
         const client = axios.create({
-            baseURL: backupNode.api_url,
+            baseURL: apiUrl,
             timeout: 60000,
             headers: {
                 'X-Node-Secret': backupNode.secret_key
@@ -200,10 +216,10 @@ export class CentralPrintRouter {
         return {
             node: {
                 id: backupNode.id,
-                node_name: backupNode.node_name,
-                api_url: backupNode.api_url,
-                status: backupNode.status,
-                last_heartbeat: backupNode.last_heartbeat
+                node_name: backupNode.hostname || `client-${backupNode.id}`,
+                api_url: apiUrl,
+                status: 'online',
+                last_heartbeat: backupNode.last_seen
             },
             client
         };
@@ -401,8 +417,8 @@ export class CentralPrintRouter {
 
         let nodeName = null;
         if (job.node_id) {
-            const node = await this.fastify.knex('nodes').where({ id: job.node_id }).first();
-            nodeName = node?.node_name;
+            const node = await this.fastify.knex('clients').where({ id: job.node_id }).first();
+            nodeName = node?.hostname || `client-${job.node_id}`;
         }
 
         return {
@@ -435,17 +451,19 @@ export class CentralPrintRouter {
      * Mark node as offline in database
      */
     private async markNodeOffline(nodeId: number): Promise<void> {
-        const node = await this.fastify.knex('nodes').where({ id: nodeId }).first();
+        const node = await this.fastify.knex('clients').where({ id: nodeId }).first();
 
-        if (node && node.status !== 'offline') {
-            await this.fastify.knex('nodes')
+        if (node && node.is_online) {
+            await this.fastify.knex('clients')
                 .where({ id: nodeId })
-                .update({ status: 'offline' });
+                .update({ is_online: false, updated_at: new Date() });
+
+            const nodeName = node.hostname || `client-${nodeId}`;
 
             // Emit alert
             this.fastify.io?.emit('node:offline', {
                 nodeId,
-                nodeName: node.node_name
+                nodeName: nodeName
             });
 
             // Create alert record
@@ -454,13 +472,13 @@ export class CentralPrintRouter {
                     type: 'node_offline',
                     severity: 'error',
                     title: 'Print Node Offline',
-                    message: `Print server ${node.node_name} is not responding`
+                    message: `Print server ${nodeName} is not responding`
                 });
 
             // Fail over jobs to another node if possible
             await this.failoverJobsFromNode(nodeId);
 
-            logger.warn(`[CentralRouter] Node ${node.node_name} marked as offline`);
+            logger.warn(`[CentralRouter] Node ${nodeName} marked as offline`);
 
             // Remove from cache
             this.nodeCache.delete(nodeId);
@@ -487,27 +505,27 @@ export class CentralPrintRouter {
 
             if (!originalPrinter) continue;
 
-            // Find printers with same name on different nodes
+            // Find printers with same name on different nodes/clients
             const backupPrinter = await this.fastify.knex('printers')
                 .where('name', originalPrinter.name)
-                .where('node_id', '!=', nodeId)
+                .where('client_id', '!=', nodeId)
                 .where('status', '!=', 'inactive')
                 .first();
 
             if (backupPrinter) {
-                // Re-route job to backup printer/node
+                // Re-route job to backup printer/client node
                 await this.fastify.knex('print_jobs')
                     .where({ id: job.id })
                     .update({
                         printer_id: backupPrinter.id,
-                        node_id: backupPrinter.node_id,
+                        node_id: backupPrinter.client_id,
                         error_message: `Failover from node ${nodeId}`
                     });
 
                 this.fastify.io?.emit('job:failover', {
                     jobId: job.job_id,
                     fromNode: nodeId,
-                    toNode: backupPrinter.node_id,
+                    toNode: backupPrinter.client_id,
                     toPrinter: backupPrinter.id
                 });
 

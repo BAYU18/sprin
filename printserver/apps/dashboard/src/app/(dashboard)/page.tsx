@@ -32,6 +32,28 @@ function MonitorIcon() {
   );
 }
 
+function ServerIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="2" y="3" width="20" height="8" rx="2" ry="2" />
+      <rect x="2" y="13" width="20" height="8" rx="2" ry="2" />
+      <line x1="6" y1="7" x2="6.01" y2="7" />
+      <line x1="6" y1="17" x2="6.01" y2="17" />
+    </svg>
+  );
+}
+
+function PrinterMiniIcon({ online }: { online: boolean }) {
+  const color = online ? 'var(--accent-green)' : 'var(--accent-red)';
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ width: 18, height: 18, opacity: 0.7 }}>
+      <polyline points="6 9 6 2 18 2 18 9" />
+      <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" />
+      <rect x="6" y="14" width="12" height="8" />
+    </svg>
+  );
+}
+
 function DocumentIcon() {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
@@ -98,6 +120,16 @@ function WifiIcon() {
   );
 }
 
+function DownloadIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor} " strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ width: 18, height: 18 }}>
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+      <polyline points="7 10 12 15 17 10" />
+      <line x1="12" y1="15" x2="12" y2="3" />
+    </svg>
+  );
+}
+
 // ─── Count-Up Hook ─────────────────────────────────────────────────────────────
 
 function useCountUp(target: number, duration = 1200) {
@@ -135,6 +167,7 @@ function StatCard({
   total,
   label,
   subtext,
+  index = 0,
 }: {
   icon: React.ReactNode;
   badge: string;
@@ -143,18 +176,19 @@ function StatCard({
   total?: number;
   label: string;
   subtext: React.ReactNode;
+  index?: number;
 }) {
   const animated = useCountUp(value);
   const pct = total && total > 0 ? (value / total) * 100 : 0;
 
   const badgeColors: Record<string, React.CSSProperties> = {
-    green: { background: 'rgba(0,255,136,0.1)', border: '1px solid rgba(0,255,136,0.3)', color: '#00ff88' },
-    amber: { background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)', color: '#f59e0b' },
-    cyan: { background: 'rgba(0,212,255,0.1)', border: '1px solid rgba(0,212,255,0.3)', color: '#00d4ff' },
+    green: { background: 'rgba(0,255,136,0.12)', border: '1px solid rgba(0,255,136,0.35)', color: '#00ff88' },
+    amber: { background: 'rgba(245,158,11,0.12)', border: '1px solid rgba(245,158,11,0.35)', color: '#f59e0b' },
+    cyan: { background: 'rgba(0,212,255,0.12)', border: '1px solid rgba(0,212,255,0.35)', color: '#00d4ff' },
   };
 
   return (
-    <div className="stat-card">
+    <div className="stat-card" style={{ '--index': index } as React.CSSProperties}>
       <div className="stat-card-header">
         <div className="stat-icon" style={{ color: 'var(--accent-cyan)' }}>{icon}</div>
         <span className="stat-badge" style={{ ...badgeColors[badgeColor], fontSize: 10, padding: '2px 8px', borderRadius: 4, fontFamily: 'Share Tech Mono', textTransform: 'uppercase' }}>
@@ -190,177 +224,498 @@ function SkeletonCard() {
   );
 }
 
+// ─── Live Active Server Nodes ──────────────────────────────────────────────────
+
+function ActiveNodeList({ nodes }: { nodes: any[] }) {
+  return (
+    <div className="active-nodes-section" style={{
+      background: 'linear-gradient(135deg, var(--bg-card) 0%, var(--bg-secondary) 100%)',
+      border: '1px solid var(--border)',
+      borderRadius: 16,
+      padding: '20px 24px',
+      marginBottom: 28,
+      animation: 'fadeInUp 0.6s ease forwards',
+      animationDelay: '0.2s',
+      opacity: 0,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ color: 'var(--accent-green)' }}>
+            <ActivityIcon color="var(--accent-green)" />
+          </span>
+          <span style={{ fontFamily: 'Rajdhani', fontSize: 14, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 1, color: 'var(--text-muted)' }}>
+            Live Server Nodes
+          </span>
+          <span style={{
+            background: 'rgba(0,255,136,0.12)',
+            border: '1px solid rgba(0,255,136,0.35)',
+            color: 'var(--accent-green)',
+            fontSize: 10,
+            padding: '2px 8px',
+            borderRadius: 4,
+            fontFamily: 'Share Tech Mono',
+            textTransform: 'uppercase',
+            marginLeft: 4,
+          }}>
+            {nodes.length} ONLINE
+          </span>
+        </div>
+        <span style={{ fontSize: 10, fontFamily: 'Share Tech Mono', color: 'var(--text-muted)' }}>
+          Updated {format(new Date(), 'HH:mm:ss')}
+        </span>
+      </div>
+
+      {nodes.length === 0 ? (
+        <div style={{
+          padding: '24px',
+          textAlign: 'center',
+          color: 'var(--text-muted)',
+          fontFamily: 'Rajdhani',
+          fontSize: 13,
+          border: '1px dashed var(--border)',
+          borderRadius: 8,
+        }}>
+          No active server nodes. Agents will appear here once they send a heartbeat.
+        </div>
+      ) : (
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
+          gap: 10,
+        }}>
+          {nodes.map((n: any) => {
+            const lastSeenMs = n.last_seen ? new Date(n.last_seen).getTime() : 0;
+            const seenAgo = Math.max(0, Math.floor((Date.now() - lastSeenMs) / 1000));
+            const stale = !lastSeenMs || seenAgo > 5 * 60;
+            // Human-friendly "Xs/Xm/Xh/Xd ago"
+            const fmtAgo = (s: number) => {
+              if (s < 60) return `${s}s ago`;
+              if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+              if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+              return `${Math.floor(s / 86400)}d ago`;
+            };
+            return (
+              <Link
+                key={n.id}
+                href={`/clients/${n.id}`}
+                style={{
+                  textDecoration: 'none',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 12,
+                  padding: '12px 14px',
+                  background: stale ? 'rgba(255,184,0,0.04)' : 'rgba(0,255,136,0.04)',
+                  border: stale ? '1px solid rgba(255,184,0,0.35)' : '1px solid rgba(0,255,136,0.25)',
+                  borderRadius: 10,
+                  transition: 'all 0.2s ease',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = stale ? 'rgba(255,184,0,0.10)' : 'rgba(0,255,136,0.10)';
+                  e.currentTarget.style.borderColor = stale ? 'rgba(255,184,0,0.6)' : 'rgba(0,255,136,0.5)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = stale ? 'rgba(255,184,0,0.04)' : 'rgba(0,255,136,0.04)';
+                  e.currentTarget.style.borderColor = stale ? 'rgba(255,184,0,0.35)' : 'rgba(0,255,136,0.25)';
+                }}
+              >
+                <span style={{
+                  width: 8,
+                  height: 8,
+                  borderRadius: '50%',
+                  background: stale ? 'var(--accent-amber)' : 'var(--accent-green)',
+                  boxShadow: stale ? '0 0 8px var(--accent-amber)' : '0 0 8px var(--accent-green)',
+                  flexShrink: 0,
+                }} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{
+                    fontFamily: 'Share Tech Mono',
+                    fontSize: 13,
+                    fontWeight: 600,
+                    color: 'var(--text-primary)',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}>
+                    {n.hostname || `node-${n.id}`}
+                  </div>
+                  <div style={{
+                    fontFamily: 'Share Tech Mono',
+                    fontSize: 10,
+                    color: stale ? 'var(--accent-amber)' : 'var(--text-muted)',
+                    marginTop: 2,
+                  }}>
+                    {n.ip_address || 'no-ip'} • {n.os_version || 'unknown OS'} • {fmtAgo(seenAgo)}
+                    {stale ? ' • STALE' : ''}
+                  </div>
+                </div>
+                <ArrowIcon />
+              </Link>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Network Topology ──────────────────────────────────────────────────────────
 
-function NetworkTopology({ printers: printerList, clients: clientList }: { printers: any[]; clients: any[] }) {
-  const onlinePrinters = printerList.filter((p: any) => p.status === 'online');
-  const offlinePrinters = printerList.filter((p: any) => p.status !== 'online');
+function NetworkTopology({ printers: printerList }: { printers: any[]; clients: any[] }) {
+  const onlinePrinters = printerList.filter(p => p.status === 'online');
+  const offlinePrinters = printerList.filter(p => p.status !== 'online');
+  const total = printerList.length;
+  const [now, setNow] = useState(new Date());
+  const [recentlyChanged, setRecentlyChanged] = useState<(number | string)[]>([]);
+  const prevStatusRef = useRef<Map<number | string, string>>(new Map());
 
-  const centerX = 500;
-  const centerY = 200;
-  const radius = 140;
+  // Tick clock every second so the "Ns ago" / updated label refreshes
+  useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(t);
+  }, []);
 
-  const printerPositions = printerList.map((p: any, i: number) => {
-    const angle = ((i - (printerList.length - 1) / 2) / Math.max(printerList.length, 1)) * Math.PI * 0.7 - Math.PI / 2;
-    return {
-      x: centerX + radius * Math.cos(angle),
-      y: centerY + radius * Math.sin(angle),
-      printer: p,
-    };
-  });
+  // Detect status changes → flash the affected box
+  useEffect(() => {
+    const changed: (number | string)[] = [];
+    const prev = prevStatusRef.current;
+    for (const p of printerList) {
+      const key = p.id;
+      const wasOnline = prev.get(key);
+      const isOnline = p.status === 'online';
+      if (wasOnline !== undefined && wasOnline !== p.status) {
+        changed.push(key);
+        setTimeout(() => {
+          setRecentlyChanged(s => s.filter(id => id !== key));
+        }, 1500);
+      }
+      prev.set(key, p.status);
+    }
+    if (changed.length > 0) {
+      setRecentlyChanged(s => [...s, ...changed]);
+    }
+  }, [printerList]);
 
-  const clientPositions = clientList.slice(0, 4).map((c: any, i: number) => {
-    const angle = ((i - (Math.min(clientList.length, 4) - 1) / 2) / Math.max(Math.min(clientList.length, 4), 1)) * Math.PI * 0.6 + Math.PI * 0.2;
-    return {
-      x: centerX + (radius + 80) * Math.cos(angle),
-      y: centerY + (radius + 80) * Math.sin(angle),
-      client: c,
-    };
-  });
+  const copyToClipboard = async (text: string, btnId?: string) => {
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        // Fallback for non-secure contexts
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.left = '-9999px';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      }
+      // Visual feedback — flash the button
+      if (btnId) {
+        const btn = document.querySelector(`[data-copy-id="${btnId}"]`) as HTMLElement;
+        if (btn) {
+          const origBg = btn.style.background;
+          const origBorder = btn.style.border;
+          btn.style.background = 'rgba(0, 255, 136, 0.3)';
+          btn.style.border = '1px solid var(--accent-green)';
+          const orig = btn.innerHTML;
+          btn.innerHTML = '<span style="font-weight:700;letter-spacing:0.5px;">✓ COPIED</span>';
+          setTimeout(() => {
+            btn.style.background = origBg;
+            btn.style.border = origBorder;
+            btn.innerHTML = orig;
+          }, 1200);
+        }
+      }
+    } catch (err) {
+      console.error('Copy failed:', err);
+    }
+  };
+
+  const renderBox = (p: any, isOnline: boolean) => {
+    const isFlashing = recentlyChanged.indexOf(p.id) !== -1;
+    const ippUri = `ipp://192.168.1.141:631/printers/${p.slug || ''}`;
+    const addCmd = `Add-Printer -Name "${p.name}" -DriverName "Generic / Microsoft IPP Class Driver" -PortName "${ippUri}"`;
+    return (
+      <div
+        key={p.id}
+        style={{
+          background: 'var(--bg-secondary)',
+          border: `1px solid ${
+            isFlashing
+              ? 'var(--accent-cyan)'
+              : isOnline
+              ? 'rgba(0, 255, 136, 0.35)'
+              : 'rgba(239, 68, 68, 0.35)'
+          }`,
+          borderRadius: 10,
+          padding: '14px 16px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 8,
+          position: 'relative',
+          transition: 'all 0.3s ease',
+          boxShadow: isFlashing
+            ? '0 0 16px rgba(0, 212, 255, 0.5)'
+            : isOnline
+            ? '0 0 0 rgba(0,0,0,0)'
+            : '0 0 0 rgba(0,0,0,0)',
+        }}
+      >
+        {/* Status dot */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{
+              width: 8,
+              height: 8,
+              borderRadius: '50%',
+              background: isOnline ? 'var(--accent-green)' : 'var(--accent-red)',
+              boxShadow: isOnline ? '0 0 8px var(--accent-green)' : 'none',
+              flexShrink: 0,
+              animation: isOnline ? 'none' : 'pulse-red 1.5s ease-in-out infinite',
+            }} />
+            <span style={{
+              fontFamily: 'Share Tech Mono',
+              fontSize: 9,
+              fontWeight: 700,
+              textTransform: 'uppercase',
+              color: isOnline ? 'var(--accent-green)' : 'var(--accent-red)',
+              letterSpacing: 1,
+            }}>
+              {isOnline ? 'Online' : 'Offline'}
+            </span>
+          </div>
+          <PrinterMiniIcon online={isOnline} />
+        </div>
+
+        {/* Printer name */}
+        <div style={{
+          fontFamily: 'Share Tech Mono',
+          fontSize: 13,
+          fontWeight: 600,
+          color: 'var(--text-primary)',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }} title={p.name}>
+          {p.name}
+        </div>
+
+        {/* IP + node */}
+        <div style={{
+          fontFamily: 'Share Tech Mono',
+          fontSize: 10,
+          color: 'var(--text-muted)',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}>
+          {p.ip || p.ip_address || 'no-ip'}
+          {p.node_hostname || p.client_hostname ? ` · ${p.node_hostname || p.client_hostname}` : ''}
+        </div>
+
+        {/* IPP URL snippet + copy buttons */}
+        {p.slug ? (
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 6,
+              marginTop: 2,
+            }}
+          >
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                background: 'rgba(0, 0, 0, 0.4)',
+                border: '1px solid rgba(0, 212, 255, 0.25)',
+                borderRadius: 6,
+                padding: '5px 8px',
+                fontFamily: 'Share Tech Mono',
+                fontSize: 9,
+                color: 'var(--accent-cyan)',
+                overflow: 'hidden',
+              }}
+              title={ippUri}
+            >
+              <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {ippUri}
+              </span>
+              <button
+                onClick={(e) => { e.stopPropagation(); copyToClipboard(ippUri, `ipp-${p.id}`); }}
+                data-copy-id={`ipp-${p.id}`}
+                title="Copy IPP URL"
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  color: 'var(--accent-cyan)',
+                  cursor: 'pointer',
+                  padding: 0,
+                  fontSize: 11,
+                  flexShrink: 0,
+                  display: 'flex',
+                  alignItems: 'center',
+                }}
+              >
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                </svg>
+              </button>
+            </div>
+
+            <button
+              onClick={(e) => { e.stopPropagation(); copyToClipboard(addCmd, `ps-${p.id}`); }}
+              data-copy-id={`ps-${p.id}`}
+              title="Copy PowerShell Add-Printer command"
+              style={{
+                background: 'rgba(0, 255, 136, 0.1)',
+                border: '1px solid rgba(0, 255, 136, 0.35)',
+                borderRadius: 6,
+                padding: '5px 8px',
+                fontFamily: 'Share Tech Mono',
+                fontSize: 9,
+                fontWeight: 600,
+                color: 'var(--accent-green)',
+                cursor: 'pointer',
+                textTransform: 'uppercase',
+                letterSpacing: 0.5,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 6,
+                transition: 'all 0.2s ease',
+              }}
+            >
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="4 17 10 11 4 5"></polyline>
+                <line x1="12" y1="19" x2="20" y2="19"></line>
+              </svg>
+              Copy Add-Printer Command
+            </button>
+          </div>
+        ) : null}
+      </div>
+    );
+  };
 
   return (
     <div className="network-section">
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
-        <span style={{ color: 'var(--accent-cyan)' }}><WifiIcon /></span>
-        <span style={{ fontFamily: 'Rajdhani', fontSize: 14, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 1, color: 'var(--text-muted)' }}>
-          Network Topology
-        </span>
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        marginBottom: 16,
+        flexWrap: 'wrap',
+        gap: 8,
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ color: 'var(--accent-cyan)' }}><WifiIcon /></span>
+          <span style={{
+            fontFamily: 'Rajdhani',
+            fontSize: 14,
+            fontWeight: 700,
+            textTransform: 'uppercase',
+            letterSpacing: 1,
+            color: 'var(--text-muted)',
+          }}>
+            Printer Network
+          </span>
+          <span style={{
+            background: 'rgba(0,212,255,0.12)',
+            border: '1px solid rgba(0,212,255,0.35)',
+            color: 'var(--accent-cyan)',
+            fontSize: 10,
+            padding: '2px 8px',
+            borderRadius: 4,
+            fontFamily: 'Share Tech Mono',
+            textTransform: 'uppercase',
+          }}>
+            LIVE
+          </span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, fontFamily: 'Share Tech Mono', fontSize: 10, color: 'var(--text-muted)' }}>
+          <span><span style={{ color: 'var(--accent-green)' }}>{onlinePrinters.length}</span> online</span>
+          <span><span style={{ color: 'var(--accent-red)' }}>{offlinePrinters.length}</span> offline</span>
+          <span>· {total} total</span>
+          <span>· {format(now, 'HH:mm:ss')}</span>
+        </div>
       </div>
-      <div className="network-map">
-        <svg viewBox="0 0 1000 400" style={{ width: '100%', height: 'auto' }}>
-          <defs>
-            <filter id="glow">
-              <feGaussianBlur stdDeviation="3" result="coloredBlur" />
-              <feMerge>
-                <feMergeNode in="coloredBlur" />
-                <feMergeNode in="SourceGraphic" />
-              </feMerge>
-            </filter>
-            <filter id="glowGreen">
-              <feGaussianBlur stdDeviation="2" result="coloredBlur" />
-              <feMerge>
-                <feMergeNode in="coloredBlur" />
-                <feMergeNode in="SourceGraphic" />
-              </feMerge>
-            </filter>
-          </defs>
 
-          {/* Connection lines */}
-          {printerPositions.map((pos, i) => (
-            <line
-              key={`line-${i}`}
-              x1={centerX} y1={centerY}
-              x2={pos.x} y2={pos.y}
-              stroke="#1e3050"
-              strokeWidth="2"
-            />
-          ))}
-          {clientPositions.map((pos, i) => (
-            <line
-              key={`cline-${i}`}
-              x1={centerX} y1={centerY}
-              x2={pos.x} y2={pos.y}
-              stroke="#1e3050"
-              strokeWidth="1"
-              strokeDasharray="4 4"
-            />
-          ))}
-
-          {/* Animated packets on online printer lines */}
-          {printerPositions.filter(p => p.printer.status === 'online').map((pos, i) => (
-            <circle key={`packet-${i}`} r="4" fill="#00d4ff" opacity="0.8">
-              <animateMotion
-                path={`M${centerX},${centerY} L${pos.x},${pos.y}`}
-                dur={`${2.8 + i * 0.3}s`
-}
-                repeatCount="indefinite"
-                begin={`${i * 0.5}s`}
-              />
-            </circle>
-          ))}
-
-          {/* Center node — PRINT SERVER */}
-          <rect
-            x={centerX - 60} y={centerY - 20}
-            width={120} height={40}
-            rx="6"
-            fill="#111c30"
-            stroke="#00d4ff"
-            strokeWidth="2"
-            filter="url(#glow)"
-          />
-          <circle cx={centerX - 45} cy={centerY} r="5" fill="#00ff88" filter="url(#glowGreen)">
-            <animate attributeName="opacity" values="1;0.4;1" dur="2s" repeatCount="indefinite" />
-          </circle>
-          <text
-            x={centerX + 5} y={centerY + 4}
-            textAnchor="middle"
-            fill="#e2f0ff"
-            fontSize="11"
-            fontFamily="Share Tech Mono"
-            fontWeight="600"
-          >
-            PRINT SERVER
-          </text>
-
-          {/* Printer nodes */}
-          {printerPositions.length === 0 ? (
-            <text x={centerX} y={centerY - 60} textAnchor="middle" fill="#4a6080" fontSize="12" fontFamily="Share Tech Mono">
-              NO NODES CONNECTED
-            </text>
-          ) : (
-            printerPositions.map((pos, i) => {
-              const p = pos.printer;
-              const isOnline = p.status === 'online';
-              return (
-                <g key={`printer-${i}`} opacity={isOnline ? 1 : 0.6}>
-                  <rect
-                    x={pos.x - 45} y={pos.y - 18}
-                    width={90} height={36}
-                    rx="5"
-                    fill="#111c30"
-                    stroke={isOnline ? '#00d4ff' : '#ff3d5a'}
-                    strokeWidth="1.5"
-                  />
-                  <circle
-                    cx={pos.x - 32} cy={pos.y}
-                    r="4"
-                    fill={isOnline ? '#00ff88' : '#ff3d5a'}
-                    filter={isOnline ? 'url(#glowGreen)' : ''}
-                  >
-                    {!isOnline && (
-                      <animate attributeName="opacity" values="1;0.3;1" dur="1.5s" repeatCount="indefinite" />
-                    )}
-                  </circle>
-                  <text x={pos.x + 5} y={pos.y - 4} textAnchor="middle" fill="#e2f0ff" fontSize="10" fontFamily="Rajdhani" fontWeight="600">
-                    {p.name?.slice(0, 12) || `Printer ${i + 1}`}
-                  </text>
-                  <text x={pos.x + 5} y={pos.y + 8} textAnchor="middle" fill="#4a6080" fontSize="9" fontFamily="Share Tech Mono">
-                    {p.ip || p.id?.toString().slice(-4) || ''}
-                  </text>
-                </g>
-              );
-            })
+      {total === 0 ? (
+        <div style={{
+          padding: 48,
+          textAlign: 'center',
+          color: 'var(--text-muted)',
+          fontFamily: 'Rajdhani',
+          fontSize: 14,
+          border: '1px dashed var(--border)',
+          borderRadius: 8,
+        }}>
+          No printers registered yet. Heartbeats from agents will populate this view.
+        </div>
+      ) : (
+        <>
+          {/* Online section */}
+          {onlinePrinters.length > 0 && (
+            <div style={{ marginBottom: 20 }}>
+              <div style={{
+                fontFamily: 'Rajdhani',
+                fontSize: 11,
+                fontWeight: 700,
+                textTransform: 'uppercase',
+                letterSpacing: 1.5,
+                color: 'var(--accent-green)',
+                marginBottom: 10,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+              }}>
+                <span style={{ display: 'inline-block', width: 6, height: 6, borderRadius: '50%', background: 'var(--accent-green)', boxShadow: '0 0 6px var(--accent-green)' }} />
+                Active Printers ({onlinePrinters.length})
+              </div>
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
+                gap: 10,
+              }}>
+                {onlinePrinters.map(p => renderBox(p, true))}
+              </div>
+            </div>
           )}
 
-          {/* Client nodes */}
-          {clientPositions.map((pos, i) => (
-            <g key={`client-${i}`}>
-              <rect
-                x={pos.x - 30} y={pos.y - 12}
-                width={60} height={24}
-                rx="4"
-                fill="#0d1526"
-                stroke="#1e3050"
-                strokeWidth="1"
-              />
-              <text x={pos.x} y={pos.y + 4} textAnchor="middle" fill="#4a6080" fontSize="9" fontFamily="Share Tech Mono">
-                {pos.client.name?.slice(0, 10) || `CLT-${i + 1}`}
-              </text>
-            </g>
-          ))}
-        </svg>
-      </div>
+          {/* Offline section */}
+          {offlinePrinters.length > 0 && (
+            <div>
+              <div style={{
+                fontFamily: 'Rajdhani',
+                fontSize: 11,
+                fontWeight: 700,
+                textTransform: 'uppercase',
+                letterSpacing: 1.5,
+                color: 'var(--accent-red)',
+                marginBottom: 10,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+              }}>
+                <span style={{ display: 'inline-block', width: 6, height: 6, borderRadius: '50%', background: 'var(--accent-red)' }} />
+                Offline Printers ({offlinePrinters.length})
+              </div>
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
+                gap: 10,
+                opacity: 0.75,
+              }}>
+                {offlinePrinters.map(p => renderBox(p, false))}
+              </div>
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 }
@@ -373,6 +728,20 @@ export default function DashboardPage() {
   const [todayJobs, setTodayJobs] = useState<any[]>([]);
   const [volumeData, setVolumeData] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [isVisible, setIsVisible] = useState(false);
+  const [agentInfo, setAgentInfo] = useState<{version: string, size: number, buildTime: string, downloadUrl: string} | null>(null);
+
+  useEffect(() => {
+    // Fetch live agent build info from server
+    fetch('/downloads/agent/info')
+      .then(r => r.ok ? r.json() : null)
+      .then(info => { if (info) setAgentInfo(info); })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    setIsVisible(true);
+  }, []);
 
   const fetchData = async () => {
     try {
@@ -420,8 +789,21 @@ export default function DashboardPage() {
   // ── Derived stats ──────────────────────────────────────────────────────────
   const onlinePrinters = printerList.filter((p: any) => p.status === 'online').length;
   const totalPrinters = printerList.length;
-  const activeClients = clientList.filter((c: any) => c.active || c.online).length;
+  // Trust the server's is_online flag (set/cleared on heartbeat) as the primary
+  // signal. last_seen staleness is exposed separately so the UI can warn the
+  // operator without falsely hiding nodes whose agents use a long heartbeat
+  // interval.
+  const STALE_HEARTBEAT_MS = 5 * 60 * 1000; // 5 minutes
+  const isNodeOnline = (c: any) => c?.is_online === true;
+  const isHeartbeatStale = (c: any) => {
+    if (!c?.last_seen) return true;
+    return Date.now() - new Date(c.last_seen).getTime() > STALE_HEARTBEAT_MS;
+  };
+  const activeClients = clientList.filter(isNodeOnline).length;
   const totalClients = clientList.length;
+  const activeNodeList = clientList
+    .filter(isNodeOnline)
+    .sort((a: any, b: any) => new Date(b.last_seen).getTime() - new Date(a.last_seen).getTime());
 
   const today = new Date().toDateString();
   const todayFiltered = todayJobs.filter((j: any) => {
@@ -449,7 +831,7 @@ export default function DashboardPage() {
     return (
       <div className="space-y-6" style={{ padding: '0 24px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
-          <div className="skeleton-pulse" style={{ height: 28, width: 160, borderRadius: 6 }} />
+          <div className="skeleton-title" style={{ height: 28, width: 160, borderRadius: 6 }} />
           <div className="skeleton-pulse" style={{ height: 36, width: 120, borderRadius: 6 }} />
         </div>
         <div className="stat-cards">
@@ -471,24 +853,23 @@ export default function DashboardPage() {
   }
 
   return (
-    <div className="space-y-6" style={{ padding: '0 24px' }}>
+    <div className={`dashboard-content ${isVisible ? 'visible' : ''}`} style={{ padding: '0 24px' }}>
       {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
-        <h1 style={{ fontFamily: 'Rajdhani', fontSize: 22, fontWeight: 700, color: 'var(--text-primary)', textTransform: 'uppercase', letterSpacing: 2 }}>
+      <div className="dashboard-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 28 }}>
+        <h1 style={{ fontFamily: 'Rajdhani', fontSize: 24, fontWeight: 700, color: 'var(--text-primary)', textTransform: 'uppercase', letterSpacing: 2 }}>
           Dashboard
         </h1>
         <button
           onClick={handleRefresh}
-          style={{
-            display: 'flex', alignItems: 'center', gap: 8,
-            padding: '8px 16px',
-            background: 'rgba(0,212,255,0.1)', border: '1px solid rgba(0,212,255,0.3)',
-            borderRadius: 6, color: 'var(--accent-cyan)',
-            fontFamily: 'Rajdhani', fontSize: 13, fontWeight: 600,
-            cursor: 'pointer', textTransform: 'uppercase', letterSpacing: 1,
-          }}
+          className="btn-primary"
+          style={{ gap: 8 }}
         >
-          ↻ Refresh
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ width: 16, height: 16 }}>
+            <polyline points="23 4 23 10 17 10"/>
+            <polyline points="1 20 1 14 7 14"/>
+            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+          </svg>
+          Refresh
         </button>
       </div>
 
@@ -498,27 +879,32 @@ export default function DashboardPage() {
           icon={<PrinterIcon />}
           badge={onlinePrinters === totalPrinters && totalPrinters > 0 ? 'Online' : 'Warning'}
           badgeColor={onlinePrinters > 0 ? 'green' : 'amber'}
-          value={totalPrinters}
+          value={onlinePrinters}
           total={totalPrinters}
           label="Total Printers"
-          subtext={<><span style={{ color: '#00ff88' }}>{onlinePrinters}</span> of {totalPrinters} online</>}
+          subtext={<><span style={{ color: 'var(--accent-green)' }}>{onlinePrinters}</span> of {totalPrinters} online</>}
+          index={0}
         />
-        <StatCard
-          icon={<MonitorIcon />}
-          badge="Active"
-          badgeColor="cyan"
-          value={activeClients}
-          total={totalClients}
-          label="Active Clients"
-          subtext={<><span style={{ color: '#00d4ff' }}>{activeClients}</span> of {totalClients} total</>}
-        />
+        <Link href="/clients" style={{ textDecoration: 'none', display: 'block' }}>
+          <StatCard
+            icon={<ServerIcon />}
+            badge={activeClients > 0 ? 'Online' : 'Offline'}
+            badgeColor={activeClients > 0 ? 'green' : 'amber'}
+            value={activeClients}
+            total={totalClients}
+            label="Active Server Nodes"
+            subtext={<><span style={{ color: activeClients > 0 ? 'var(--accent-green)' : 'var(--accent-amber)' }}>{activeClients}</span> of {totalClients} online</>}
+            index={1}
+          />
+        </Link>
         <StatCard
           icon={<DocumentIcon />}
           badge="Today"
           badgeColor="cyan"
           value={todayFiltered.length}
           label="Today's Jobs"
-          subtext={<><span style={{ color: '#00ff88' }}>{completedJobs}</span> completed</>}
+          subtext={<><span style={{ color: 'var(--accent-green)' }}>{completedJobs}</span> completed</>}
+          index={2}
         />
         <StatCard
           icon={<WarningIcon />}
@@ -527,56 +913,73 @@ export default function DashboardPage() {
           value={pendingJobs}
           label="Pending Queue"
           subtext="jobs waiting"
+          index={3}
         />
       </div>
 
+      {/* Live Active Server Nodes */}
+      <ActiveNodeList nodes={activeNodeList} />
+
       {/* Download Agent Card */}
-      <div style={{
-        background: 'linear-gradient(135deg, #0a1628 0%, #1a2d4a 100%)',
-        border: '1px solid rgba(0,212,255,0.3)',
-        borderRadius: 12,
+      <div className="download-agent-card" style={{
+        background: 'linear-gradient(135deg, var(--bg-card) 0%, var(--bg-secondary) 100%)',
+        border: '1px solid var(--border)',
+        borderRadius: 16,
         padding: '24px 32px',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
         flexWrap: 'wrap',
-        gap: 16
+        gap: 16,
+        marginBottom: 28,
+        animation: 'fadeInUp 0.6s ease forwards',
+        animationDelay: '0.15s',
+        opacity: 0,
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
           <div style={{
-            background: 'rgba(0,212,255,0.1)',
-            border: '1px solid rgba(0,212,255,0.3)',
-            borderRadius: 10,
-            padding: 12,
-            display: 'flex'
+            background: 'rgba(0, 212, 255, 0.1)',
+            border: '1px solid rgba(0, 212, 255, 0.3)',
+            borderRadius: 12,
+            padding: 14,
+            display: 'flex',
+            animation: 'float 3s ease-in-out infinite',
           }}>
-            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#00d4ff" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="var(--accent-cyan)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
               <polyline points="7 10 12 15 17 10" />
               <line x1="12" y1="15" x2="12" y2="3" />
             </svg>
           </div>
           <div>
-            <div style={{ fontFamily: 'Share Tech Mono', fontSize: 14, color: '#00d4ff', fontWeight: 600 }}>DOWNLOAD AGENT</div>
-            <div style={{ fontFamily: 'Rajdhani', fontSize: 12, color: 'rgba(255,255,255,0.5)', marginTop: 2 }}>PrintServer Node Agent v1.0.0 — Windows 64-bit</div>
+            <div style={{ fontFamily: 'Share Tech Mono', fontSize: 14, color: 'var(--accent-cyan)', fontWeight: 600 }}>DOWNLOAD AGENT</div>
+            <div style={{ fontFamily: 'Rajdhani', fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
+              {agentInfo ? (
+                <>PrintServer Node Agent <span style={{ color: 'var(--accent-cyan)' }}>v{agentInfo.version}</span> — {(agentInfo.size / 1024 / 1024).toFixed(1)} MB · built {new Date(agentInfo.buildTime).toLocaleDateString('id-ID')}</>
+              ) : (
+                <>PrintServer Node Agent v1.1.0 — Windows 64-bit</>
+              )}
+            </div>
           </div>
         </div>
         <a
           href="/downloads/agent"
-          download="PrintServer-Agent-1.0.0.exe"
+          download={agentInfo ? `PrintServer-Agent-${agentInfo.version}.exe` : "PrintServer-Agent-1.1.0.exe"}
+          className="btn-primary"
           style={{
-            background: 'linear-gradient(135deg, #00d4ff 0%, #00a8cc 100%)',
+            background: 'linear-gradient(135deg, var(--accent-cyan) 0%, #00a8cc 100%)',
             color: '#0a1628',
             fontFamily: 'Share Tech Mono',
             fontSize: 13,
             fontWeight: 600,
-            padding: '10px 24px',
-            borderRadius: 8,
+            padding: '12px 24px',
+            borderRadius: 10,
             textDecoration: 'none',
             display: 'flex',
             alignItems: 'center',
             gap: 8,
-            cursor: 'pointer'
+            cursor: 'pointer',
+            transition: 'all 0.3s ease',
           }}
         >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -594,22 +997,22 @@ export default function DashboardPage() {
       {/* Charts Row */}
       <div className="charts-row">
         {/* Print Volume — Bar Chart */}
-        <div className="chart-card">
+        <div className="chart-card" style={{ '--index': 0 } as React.CSSProperties}>
           <div className="chart-title">Print Volume (7 Days)</div>
           <ResponsiveContainer width="100%" height={200}>
             <BarChart data={chartData} margin={{ top: 5, right: 10, left: -20, bottom: 5 }}>
               <XAxis
                 dataKey="date"
-                tick={{ fill: '#4a6080', fontSize: 11, fontFamily: 'Share Tech Mono' }}
+                tick={{ fill: 'var(--text-muted)', fontSize: 11, fontFamily: 'Share Tech Mono' }}
                 tickFormatter={(val) => new Date(val).toLocaleDateString('en', { weekday: 'short' })}
-                axisLine={{ stroke: '#1e3050' }}
+                axisLine={{ stroke: 'var(--border)' }}
                 tickLine={false}
               />
-              <YAxis tick={{ fill: '#4a6080', fontSize: 11 }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fill: 'var(--text-muted)', fontSize: 11 }} axisLine={false} tickLine={false} />
               <Tooltip
-                contentStyle={{ background: '#111c30', border: '1px solid #00d4ff', borderRadius: 6, fontFamily: 'Share Tech Mono' }}
-                labelStyle={{ color: '#e2f0ff' }}
-                itemStyle={{ color: '#00d4ff' }}
+                contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--accent-cyan)', borderRadius: 8, fontFamily: 'Share Tech Mono', color: 'var(--text-primary)' }}
+                labelStyle={{ color: 'var(--text-primary)' }}
+                itemStyle={{ color: 'var(--accent-cyan)' }}
               />
               <Bar dataKey="jobs" radius={[4, 4, 0, 0]}>
                 {chartData.map((_, i) => (
@@ -618,8 +1021,8 @@ export default function DashboardPage() {
               </Bar>
               <defs>
                 <linearGradient id="barGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#00d4ff" stopOpacity={0.9} />
-                  <stop offset="100%" stopColor="#00d4ff" stopOpacity={0.2} />
+                  <stop offset="0%" stopColor="var(--accent-cyan)" stopOpacity={0.9} />
+                  <stop offset="100%" stopColor="var(--accent-cyan)" stopOpacity={0.2} />
                 </linearGradient>
               </defs>
             </BarChart>
@@ -627,37 +1030,37 @@ export default function DashboardPage() {
         </div>
 
         {/* Pages Printed — Area Chart */}
-        <div className="chart-card">
+        <div className="chart-card" style={{ '--index': 1 } as React.CSSProperties}>
           <div className="chart-title">Pages Printed (7 Days)</div>
           <ResponsiveContainer width="100%" height={200}>
             <AreaChart data={chartData} margin={{ top: 5, right: 10, left: -20, bottom: 5 }}>
               <defs>
                 <linearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#00d4ff" stopOpacity={0.3} />
-                  <stop offset="100%" stopColor="#00d4ff" stopOpacity={0} />
+                  <stop offset="0%" stopColor="var(--accent-cyan)" stopOpacity={0.3} />
+                  <stop offset="100%" stopColor="var(--accent-cyan)" stopOpacity={0} />
                 </linearGradient>
               </defs>
               <XAxis
                 dataKey="date"
-                tick={{ fill: '#4a6080', fontSize: 11, fontFamily: 'Share Tech Mono' }}
+                tick={{ fill: 'var(--text-muted)', fontSize: 11, fontFamily: 'Share Tech Mono' }}
                 tickFormatter={(val) => new Date(val).toLocaleDateString('en', { weekday: 'short' })}
-                axisLine={{ stroke: '#1e3050' }}
+                axisLine={{ stroke: 'var(--border)' }}
                 tickLine={false}
               />
-              <YAxis tick={{ fill: '#4a6080', fontSize: 11 }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fill: 'var(--text-muted)', fontSize: 11 }} axisLine={false} tickLine={false} />
               <Tooltip
-                contentStyle={{ background: '#111c30', border: '1px solid #00d4ff', borderRadius: 6, fontFamily: 'Share Tech Mono' }}
-                labelStyle={{ color: '#e2f0ff' }}
-                itemStyle={{ color: '#00d4ff' }}
+                contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--accent-cyan)', borderRadius: 8, fontFamily: 'Share Tech Mono', color: 'var(--text-primary)' }}
+                labelStyle={{ color: 'var(--text-primary)' }}
+                itemStyle={{ color: 'var(--accent-cyan)' }}
               />
               <Area
                 type="monotone"
                 dataKey="pages"
-                stroke="#00d4ff"
+                stroke="var(--accent-cyan)"
                 strokeWidth={2.5}
                 fill="url(#areaGrad)"
-                dot={{ fill: '#00d4ff', r: 3 }}
-                activeDot={{ r: 5, fill: '#00d4ff', filter: 'drop-shadow(0 0 4px #00d4ff)' }}
+                dot={{ fill: 'var(--accent-cyan)', r: 3 }}
+                activeDot={{ r: 5, fill: 'var(--accent-cyan)', filter: 'drop-shadow(0 0 4px var(--accent-cyan))' }}
               />
             </AreaChart>
           </ResponsiveContainer>
@@ -671,35 +1074,46 @@ export default function DashboardPage() {
           <div className="panel-title">Quick Stats</div>
           <div className="quick-stat-row">
             <div className="quick-stat-left">
-              <CheckIcon color="#00ff88" />
+              <CheckIcon color="var(--accent-green)" />
               <span style={{ fontFamily: 'Rajdhani', fontSize: 13, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
                 Completed Today
               </span>
             </div>
-            <span style={{ fontFamily: 'Share Tech Mono', fontSize: 20, fontWeight: 700, color: '#e2f0ff' }}>
+            <span style={{ fontFamily: 'Share Tech Mono', fontSize: 20, fontWeight: 700, color: 'var(--text-primary)' }}>
               {completedJobs}
             </span>
           </div>
           <div className="quick-stat-row">
             <div className="quick-stat-left">
-              <ClockIcon color="#f59e0b" />
+              <ClockIcon color="var(--accent-amber)" />
               <span style={{ fontFamily: 'Rajdhani', fontSize: 13, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
                 Pending Jobs
               </span>
             </div>
-            <span style={{ fontFamily: 'Share Tech Mono', fontSize: 20, fontWeight: 700, color: '#e2f0ff' }}>
+            <span style={{ fontFamily: 'Share Tech Mono', fontSize: 20, fontWeight: 700, color: 'var(--text-primary)' }}>
               {pendingJobs}
             </span>
           </div>
           <div className="quick-stat-row">
             <div className="quick-stat-left">
-              <ActivityIcon color="#00d4ff" />
+              <ActivityIcon color="var(--accent-cyan)" />
               <span style={{ fontFamily: 'Rajdhani', fontSize: 13, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
                 Processing
               </span>
             </div>
-            <span style={{ fontFamily: 'Share Tech Mono', fontSize: 20, fontWeight: 700, color: '#e2f0ff' }}>
+            <span style={{ fontFamily: 'Share Tech Mono', fontSize: 20, fontWeight: 700, color: 'var(--text-primary)' }}>
               {processingJobs}
+            </span>
+          </div>
+          <div className="quick-stat-row" style={{ borderBottom: 'none' }}>
+            <div className="quick-stat-left">
+              <DocumentIcon />
+              <span style={{ fontFamily: 'Rajdhani', fontSize: 13, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
+                Total Pages
+              </span>
+            </div>
+            <span style={{ fontFamily: 'Share Tech Mono', fontSize: 20, fontWeight: 700, color: 'var(--accent-cyan)' }}>
+              {totalPages.toLocaleString()}
             </span>
           </div>
         </div>
@@ -709,16 +1123,16 @@ export default function DashboardPage() {
           <div className="panel-title">Printer Status</div>
 
           <div className="printer-status-summary">
-            <span style={{ color: '#00ff88' }}>● {onlinePrinters} Online</span>
-            <span style={{ color: '#ff3d5a' }}>● {totalPrinters - onlinePrinters} Offline</span>
+            <span style={{ color: 'var(--accent-green)' }}>● {onlinePrinters} Online</span>
+            <span style={{ color: 'var(--accent-red)' }}>● {totalPrinters - onlinePrinters} Offline</span>
           </div>
 
           <div className="printer-status-list">
             {printerList.length === 0 ? (
               <div className="empty-state">NO PRINTERS REGISTERED</div>
             ) : (
-              printerList.map((p: any) => (
-                <div key={p.id} className="printer-status-item">
+              printerList.map((p: any, index: number) => (
+                <div key={p.id} className="printer-status-item" style={{ '--index': index } as React.CSSProperties}>
                   <div className="printer-status-left">
                     <div className={`status-indicator ${p.status === 'online' ? 'green' : 'red'}`} />
                     <div>
@@ -730,7 +1144,7 @@ export default function DashboardPage() {
                   </div>
                   <span style={{
                     fontFamily: 'Share Tech Mono', fontSize: 10,
-                    color: p.status === 'online' ? '#00ff88' : '#ff3d5a',
+                    color: p.status === 'online' ? 'var(--accent-green)' : 'var(--accent-red)',
                     textTransform: 'uppercase',
                   }}>
                     {p.status}

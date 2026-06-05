@@ -24,6 +24,14 @@ export async function setupSettingsRoutes(fastify: FastifyInstance) {
         return { success: true };
     });
 
+    fastify.get('/server-info', async (request, reply) => {
+        return {
+            name: process.env.SERVER_NAME || 'PrintServer Pro',
+            ip: process.env.SERVER_IP || '127.0.0.1',
+            port: parseInt(process.env.IPP_PORT || '631', 10)
+        };
+    });
+
     fastify.get('/notifications/channels', async (request, reply) => {
         return {
             email: {

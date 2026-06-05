@@ -1,14 +1,124 @@
 import { logger } from '../utils/logger.js';
 
 export async function autoHealScheduler(fastify: any) {
+    const safeRun = async (name: string, fn: () => Promise<void>) => {
+        try {
+            await fn();
+        } catch (err) {
+            logger.error(`[AutoHeal] ${name} crashed: ${(err as Error)?.message || err}`);
+        }
+    };
+
     setInterval(async () => {
-        await checkStuckJobs(fastify);
-        await checkOfflinePrinters(fastify);
-        await checkFailedRetries(fastify);
-        await checkQueueHealth(fastify);
+        await safeRun('checkStuckJobs', () => checkStuckJobs(fastify));
+        await safeRun('checkOfflinePrinters', () => checkOfflinePrinters(fastify));
+        await safeRun('checkFailedRetries', () => checkFailedRetries(fastify));
+        await safeRun('checkQueueHealth', () => checkQueueHealth(fastify));
     }, 60000);
 
+    // Run once at startup (after short delay) so offline printers get cleared
+    // quickly on fresh boot instead of waiting for first interval tick
+    setTimeout(() => {
+        safeRun('initial-autoClearOffline', () => autoClearOfflinePrinters(fastify));
+    }, 10000);
+
+    // Unhandled rejection safety net: never let AutoHeal errors kill the process
+    process.on('unhandledRejection', (reason) => {
+        logger.error(`[AutoHeal] Unhandled rejection: ${(reason as Error)?.message || reason}`);
+    });
+
     logger.info('[AutoHeal] Scheduler started');
+}
+
+/**
+ * Auto-remove printers that have been offline for more than 15 minutes.
+ * Runs every 5 minutes (separate from the main 60s loop).
+ * Uses soft-delete (config.auto_removed = true) so the record stays around
+ * for audit; IPP listing and dashboards filter on this flag.
+ */
+async function autoClearOfflinePrinters(fastify: any) {
+    const cutoff = new Date(Date.now() - 15 * 60000);
+
+    // Find printers whose DB status has been 'offline' for > 15 min
+    // and that are NOT already auto-removed
+    const stale = await fastify.knex('printers')
+        .where({ status: 'offline' })
+        .where('updated_at', '<', cutoff)
+        .whereRaw("(config->>'auto_removed') IS DISTINCT FROM 'true'")
+        .select('id', 'name', 'client_id', 'updated_at');
+
+    if (stale.length === 0) return;
+
+    for (const p of stale) {
+        // Cancel any waiting jobs queued for this printer before removal
+        const cancelledJobs = await fastify.knex('queues')
+            .where({ printer_id: p.id, status: 'waiting' })
+            .update({
+                status: 'cancelled',
+                updated_at: new Date()
+            });
+
+        // Mark print_jobs pointing at this printer as failed so they don't
+        // hang in 'queued' forever
+        await fastify.knex('print_jobs')
+            .where({ printer_id: p.id, status: 'queued' })
+            .update({
+                status: 'failed',
+                error_message: `Printer ${p.name} auto-removed after 15 minutes offline`,
+                updated_at: new Date()
+            });
+
+        // Soft-remove: flip a config flag, don't hard-delete (preserves
+        // print history; agent reconnect can re-register same printer).
+        // COALESCE is required because config can be NULL — `NULL || {...}`
+        // evaluates to NULL, silently losing the update.
+        await fastify.knex('printers')
+            .where({ id: p.id })
+            .update({
+                config: fastify.knex.raw(
+                    "COALESCE(config, '{}'::jsonb) || jsonb_build_object('auto_removed', 'true', 'auto_removed_at', ?::text)",
+                    [new Date().toISOString()]
+                ),
+                updated_at: new Date()
+            });
+
+        // Audit alert
+        await fastify.knex('alerts').insert({
+            printer_id: p.id,
+            type: 'printer_auto_removed',
+            severity: 'info',
+            title: 'Printer Auto-Removed',
+            message: `Printer ${p.name} auto-removed (offline > 15 min). ${cancelledJobs} queued job(s) cancelled.`
+        });
+
+        logger.warn(
+            `[AutoHeal] Auto-removed printer ${p.name} (id=${p.id}) — offline since ${p.updated_at}, ${cancelledJobs} jobs cancelled`
+        );
+
+        fastify.io?.emit('printer:auto-removed', {
+            id: p.id,
+            name: p.name,
+            reason: 'offline_15min',
+            cancelledJobs
+        });
+    }
+}
+
+let autoClearStarted = false;
+export function startAutoClearOffline(fastify: any) {
+    if (autoClearStarted) return;
+    autoClearStarted = true;
+    // every 5 minutes
+    setInterval(() => {
+        (async () => {
+            try {
+                await autoClearOfflinePrinters(fastify);
+            } catch (err) {
+                logger.error(`[AutoHeal] autoClearOfflinePrinters crashed: ${(err as Error)?.message || err}`);
+            }
+        })();
+    }, 5 * 60000);
+    logger.info('[AutoHeal] autoClearOfflinePrinters scheduled (every 5 min, 15 min offline threshold)');
 }
 
 async function checkStuckJobs(fastify: any) {
@@ -43,6 +153,19 @@ async function checkOfflinePrinters(fastify: any) {
 
     for (const { printer_id } of offlinePrinters) {
         const printer = await fastify.knex('printers').where({ id: printer_id }).first();
+
+        // Check if unresolved alert already exists to prevent duplication
+        const existingAlert = await fastify.knex('alerts')
+            .where({
+                printer_id,
+                type: 'printer_offline',
+                is_resolved: false
+            })
+            .first();
+
+        if (existingAlert) {
+            continue;
+        }
 
         logger.warn(`[AutoHeal] Printer ${printer?.name} offline for > 5 minutes`);
 
@@ -105,8 +228,21 @@ async function checkQueueHealth(fastify: any) {
         .count('* as count');
 
     for (const stat of queueStats) {
-        if (stat.count > 100) {
+        if (Number(stat.count) > 100) {
             const printer = await fastify.knex('printers').where({ id: stat.printer_id }).first();
+
+            // Check if unresolved alert already exists to prevent duplication
+            const existingAlert = await fastify.knex('alerts')
+                .where({
+                    printer_id: stat.printer_id,
+                    type: 'queue_overload',
+                    is_resolved: false
+                })
+                .first();
+
+            if (existingAlert) {
+                continue;
+            }
 
             await fastify.knex('alerts')
                 .insert({

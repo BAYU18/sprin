@@ -224,6 +224,11 @@ export class PrintRouter {
             return { success: false, error: 'Job not found' };
         }
 
+        if (job.status === 'held') {
+            logger.info(`[PrintRouter] Job ${jobId} is held, skipping execution.`);
+            return { success: true, error: 'Job is held' };
+        }
+
         // Get driver
         let driver = this.drivers.get(printerId);
         if (!driver) {
@@ -496,6 +501,78 @@ export class PrintRouter {
     }
 
     /**
+     * Hold print job
+     */
+    async holdJob(jobId: string): Promise<{ success: boolean; error?: string }> {
+        const job = await this.fastify.knex('print_jobs')
+            .where({ job_id: jobId })
+            .first();
+
+        if (!job) {
+            return { success: false, error: 'Job not found' };
+        }
+
+        if (['completed', 'cancelled', 'failed'].includes(job.status)) {
+            return { success: false, error: `Cannot hold job that is already ${job.status}` };
+        }
+
+        // Update job status to held
+        await this.fastify.knex('print_jobs')
+            .where({ id: job.id })
+            .update({ status: 'held' });
+
+        // Update queue
+        await this.fastify.knex('queues')
+            .where({ print_job_id: job.id })
+            .update({ status: 'held' });
+
+        this.fastify.io?.emit('job:held', { jobId: job.job_id });
+        logger.info(`[PrintRouter] Job ${jobId} held`);
+        return { success: true };
+    }
+
+    /**
+     * Release held print job
+     */
+    async releaseJob(jobId: string): Promise<{ success: boolean; error?: string }> {
+        const job = await this.fastify.knex('print_jobs')
+            .where({ job_id: jobId })
+            .first();
+
+        if (!job) {
+            return { success: false, error: 'Job not found' };
+        }
+
+        if (job.status !== 'held') {
+            return { success: false, error: 'Job is not held' };
+        }
+
+        // Update job status back to queued
+        await this.fastify.knex('print_jobs')
+            .where({ id: job.id })
+            .update({ status: 'queued' });
+
+        // Update queue
+        await this.fastify.knex('queues')
+            .where({ print_job_id: job.id })
+            .update({ status: 'queued' });
+
+        // Re-queue to BullMQ
+        const { addPrintJob } = await import('../queues/index.js');
+        await addPrintJob({
+            jobId: job.id,
+            printerId: job.printer_id,
+            filePath: job.file_path,
+            copies: job.copies,
+            options: {}
+        });
+
+        this.fastify.io?.emit('job:released', { jobId: job.job_id });
+        logger.info(`[PrintRouter] Job ${jobId} released`);
+        return { success: true };
+    }
+
+    /**
      * Estimate pages dari file
      */
     private async estimatePages(filePath: string, fileType: string): Promise<number> {
@@ -537,7 +614,10 @@ export class PrintRouter {
      * Start periodic health check
      */
     private startHealthCheck(): void {
-        const interval = parseInt(process.env.CHECK_INTERVAL || '30000');
+        let interval = parseInt(process.env.CHECK_INTERVAL || '30000');
+        if (interval < 1000) {
+            interval = interval * 1000; // convert seconds to ms if configured in seconds
+        }
 
         this.healthCheckInterval = setInterval(async () => {
             await this.checkAllPrinterHealth();
@@ -575,14 +655,25 @@ export class PrintRouter {
                         .where({ id: printerId })
                         .first();
 
-                    await this.fastify.knex('alerts')
-                        .insert({
+                    // Check if unresolved alert already exists to prevent duplication
+                    const existingAlert = await this.fastify.knex('alerts')
+                        .where({
                             printer_id: printerId,
                             type: 'printer_offline',
-                            severity: 'error',
-                            title: 'Printer Offline',
-                            message: `Printer ${printer?.name} is not responding`
-                        });
+                            is_resolved: false
+                        })
+                        .first();
+
+                    if (!existingAlert) {
+                        await this.fastify.knex('alerts')
+                            .insert({
+                                printer_id: printerId,
+                                type: 'printer_offline',
+                                severity: 'error',
+                                title: 'Printer Offline',
+                                message: `Printer ${printer?.name} is not responding`
+                            });
+                    }
 
                     this.fastify.io?.emit('printer:offline', {
                         printerId,
