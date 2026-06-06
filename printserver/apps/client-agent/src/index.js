@@ -109,13 +109,13 @@ class PrinterScanner {
   }
 
   async scan() {
-    logger.info('Scanning for printers...');
+    logger.info('Scanning for printers (filtering strictly for USB/LPT/COM ports)...');
     const discovered = [];
 
     try {
       // Method 1: WMIC (most reliable on Windows)
       const wmicOutput = await execPS(
-        `Get-WmiObject -Class Win32_Printer | Select-Object Name, PortName, Status, Default | ConvertTo-Json -Compress`
+        `Get-WmiObject -Class Win32_Printer | Select-Object Name, PortName, Status, Default, PrinterStatus, DetectedErrorState, WorkOffline | ConvertTo-Json -Compress`
       );
 
       if (wmicOutput) {
@@ -123,59 +123,104 @@ class PrinterScanner {
         if (!Array.isArray(printers)) printers = [printers];
 
         for (const p of printers) {
+          const name = p.Name || '';
+          const portName = (p.PortName || '').toUpperCase();
+
+          // Skip virtual printers
+          if (
+            name.includes('Microsoft Print to PDF') ||
+            name.includes('Microsoft XPS Document Writer') ||
+            name.includes('OneNote') ||
+            name.includes('Fax') ||
+            portName.startsWith('PORTPROMPT') ||
+            portName.startsWith('NUL') ||
+            portName.startsWith('SHRFAX')
+          ) {
+            continue;
+          }
+
+          // STRICT FILTER: Only physical ports (USB only)
+          const isPhysicalPort = portName.startsWith('USB');
+          if (!isPhysicalPort) {
+            continue;
+          }
+
+          // Advanced Hardware Telemetry Parsing
+          let advancedStatus = 'online';
+          let errorMessage = null;
+          
+          if (p.WorkOffline || p.PrinterStatus === 7) {
+             advancedStatus = 'offline';
+          } else if (p.DetectedErrorState !== null && p.DetectedErrorState !== 0 && p.DetectedErrorState !== 2) {
+             advancedStatus = 'error';
+             const errorCodes = {
+                 3: 'Low Paper', 4: 'Out of Paper', 5: 'Low Toner', 6: 'Out of Toner',
+                 7: 'Door Open', 8: 'Paper Jam', 9: 'Offline', 10: 'Service Requested',
+                 11: 'Output Bin Full', 12: 'Paper Problem'
+             };
+             errorMessage = errorCodes[p.DetectedErrorState] || 'Hardware Error';
+          } else if (p.PrinterStatus === 6) {
+             advancedStatus = 'error';
+             errorMessage = 'Paused / Stopped';
+          }
+
           discovered.push({
             name: p.Name,
             port: p.PortName || 'UNKNOWN',
-            status: p.Status === 'OK' ? 'online' : 'offline',
+            status: advancedStatus,
             isDefault: p.Default || false,
             driver: 'Windows Driver',
-            type: 'local'
+            type: 'local',
+            telemetry: {
+              errorStateCode: p.DetectedErrorState || 0,
+              printerStatusCode: p.PrinterStatus || 0,
+              hardwareError: errorMessage
+            }
           });
         }
       }
 
-      // Method 2: Registry lookup for spool printers
-      try {
-        const regOutput = await execPS(
-          `Get-ItemProperty "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Print\\Printers" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty PSPath`
-        );
-        if (regOutput) {
-          const regPrinters = regOutput.split('\n').filter(p => p.trim());
-          for (const rp of regPrinters) {
-            const name = rp.split('\\').pop().replace(/'/g, '');
-            if (name && !discovered.find(p => p.name === name)) {
-              discovered.push({
-                name,
-                port: 'REGISTRY',
-                status: 'unknown',
-                isDefault: false,
-                driver: 'Unknown',
-                type: 'local'
-              });
-            }
-          }
-        }
-      } catch (e) { /* skip registry */ }
-
     } catch (err) {
       logger.warn('WMIC scan failed, trying alternative method...', { error: err.message });
       
-      // Fallback: net view
+      // Fallback: Get-Printer via PowerShell
       try {
         const netOutput = await execPS(
-          `Get-Printer | Select-Object Name, Status | ConvertTo-Json -Compress`
+          `Get-Printer | Select-Object Name, PortName, Status | ConvertTo-Json -Compress`
         );
         if (netOutput) {
           let printers = JSON.parse(netOutput);
           if (!Array.isArray(printers)) printers = [printers];
           for (const p of printers) {
+            const name = p.Name || '';
+            const portName = (p.PortName || '').toUpperCase();
+
+            // Skip virtual printers
+            if (
+              name.includes('Microsoft Print to PDF') ||
+              name.includes('Microsoft XPS Document Writer') ||
+              name.includes('OneNote') ||
+              name.includes('Fax') ||
+              portName.startsWith('PORTPROMPT') ||
+              portName.startsWith('NUL') ||
+              portName.startsWith('SHRFAX')
+            ) {
+              continue;
+            }
+
+            // STRICT FILTER: Only physical ports (USB only)
+            const isPhysicalPort = portName.startsWith('USB');
+            if (!isPhysicalPort) {
+              continue;
+            }
+
             discovered.push({
               name: p.Name,
-              port: 'NETWORK',
-              status: p.Status === 'Ready' ? 'online' : 'unknown',
+              port: p.PortName || 'UNKNOWN',
+              status: p.Status === 'Ready' || p.Status === 'OK' ? 'online' : 'offline',
               isDefault: false,
-              driver: 'Network Printer',
-              type: 'network'
+              driver: 'Windows Driver',
+              type: 'local'
             });
           }
         }
@@ -185,7 +230,7 @@ class PrinterScanner {
     }
 
     this.printers = discovered;
-    logger.info(`Found ${discovered.length} printers`, { printers: discovered.map(p => p.name) });
+    logger.info(`Found ${discovered.length} physical printers`, { printers: discovered.map(p => p.name) });
     return discovered;
   }
 
@@ -484,13 +529,15 @@ $printDoc.Dispose()
   builtinWidth(name) {
     const m = { 'A3':297,'A4':210,'A5':148,'A6':105,'B4':257,'B5':182,
                 'Letter':215.9,'Legal':215.9,'Tabloid':279.4,'Executive':184.15,
-                'Folio':210,'F4':215.9,'Statement':139.7 };
+                'Folio':210,'F4':215.9,'Statement':139.7,
+                'Kertas Kwitansi':210,'Kertas SEP':210.7,'Kertas Label Besar':60.5,'Kertas Label Kecil':60.5 };
     return m[name] || null;
   }
   builtinHeight(name) {
     const m = { 'A3':420,'A4':297,'A5':210,'A6':148,'B4':364,'B5':257,
                 'Letter':279.4,'Legal':355.6,'Tabloid':431.8,'Executive':266.7,
-                'Folio':330,'F4':330.2,'Statement':215.9 };
+                'Folio':330,'F4':330.2,'Statement':215.9,
+                'Kertas Kwitansi':139.5,'Kertas SEP':90.7,'Kertas Label Besar':50,'Kertas Label Kecil':20 };
     return m[name] || null;
   }
 
@@ -854,6 +901,7 @@ class PrintServerAgent {
 
   startHeartbeat() {
     const interval = this.config.get('checkInterval') || 10000;
+    const printerRefreshInterval = this.config.get('printerRefreshInterval') || 300000; // 5 minutes default
 
     const BUILTIN_PRINTERS = [
       'microsoft print to pdf',
@@ -869,12 +917,22 @@ class PrintServerAgent {
       return BUILTIN_PRINTERS.some(b => lower.includes(b));
     };
 
+    let lastScanTime = 0;
+
     this.heartbeatTimer = setInterval(async () => {
       if (!this.clientId) {
         await this.registerWithServer();
       } else {
-        // Periodically refresh printer list
-        await this.printerScanner.scan();
+        const now = Date.now();
+        // Periodically refresh printer list (limit to 5 minutes to prevent PowerShell CPU/RAM spikes)
+        if (now - lastScanTime >= printerRefreshInterval || lastScanTime === 0) {
+          try {
+            await this.printerScanner.scan();
+            lastScanTime = now;
+          } catch (scanErr) {
+            logger.error('Scheduled printer scan failed', { error: scanErr.message });
+          }
+        }
 
         const printerList = (this.printerScanner.printers || [])
           .filter(p => p.name && !isNetworkShare(p.name) && !isBuiltin(p.name))
@@ -890,7 +948,7 @@ class PrintServerAgent {
       }
     }, interval);
 
-    logger.info(`Heartbeat started (interval: ${interval}ms)`);
+    logger.info(`Heartbeat started (interval: ${interval}ms, printer refresh: ${printerRefreshInterval}ms)`);
   }
 
   async handleNewFile(fileInfo) {
@@ -971,7 +1029,7 @@ function main() {
 
   // Start auto-updater (no-op when running unpackaged / no serverUrl)
   const updater = new AutoUpdater({
-    serverUrl: DEFAULT_CONFIG.serverUrl,
+    serverUrl: agent.config.get('serverUrl') || DEFAULT_CONFIG.serverUrl,
     log: (level, msg, data) => {
       if (data !== undefined) {
         (logger[level] || logger.info).call(logger, msg, data);

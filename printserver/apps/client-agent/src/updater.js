@@ -73,8 +73,17 @@ if (-not $ok) {
   exit 1
 }
 
-Write-Host "[updater] Swap complete, relaunching $exe"
-Start-Process -FilePath $exe
+Write-Host "[updater] Swap complete. Checking service status..."
+$serviceName = "PrintServerAgent"
+$service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+if ($service) {
+  Write-Host "[updater] Detected Windows Service. Restarting $serviceName..."
+  Restart-Service -Name $serviceName -Force
+} else {
+  Write-Host "[updater] Running in desktop mode. Relaunching $exe"
+  Start-Process -FilePath $exe
+}
+
 Write-Host "[updater] Done. Self-removing in 5s..."
 Start-Sleep -Seconds 5
 Remove-Item $PSCommandPath -Force -ErrorAction SilentlyContinue

@@ -143,51 +143,103 @@ $Shortcut.Save()
 # Install as service (if admin)
 if ($isAdmin) {
     Write-Host ""
-    Write-Host "[INFO] Installing as Windows service..." -ForegroundColor Cyan
+    Write-Host "[INFO] Installing as Windows service using NSSM..." -ForegroundColor Cyan
     
     $serviceName = "PrintServerAgent"
     $serviceDesc = "PrintServer Pro Node Agent"
+    $nssmPath = "$InstallPath\nssm.exe"
     
     # Check if service exists
     $existingService = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
-    
     if ($existingService) {
         Write-Host "[INFO] Service already exists, removing..." -ForegroundColor Yellow
         Stop-Service -Name $serviceName -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 1
         & sc.exe delete $serviceName 2>$null
     }
     
-    # Create service using nssm or sc
-    $execPath = if (Test-Path "$InstallPath\dist\printserver-agent.exe") {
-        "$InstallPath\dist\printserver-agent.exe"
-    } else {
-        "node"
-        $execArgs = "$InstallPath\src\index.js"
+    # Download NSSM if not exists
+    if (-not (Test-Path $nssmPath)) {
+        Write-Host "[INFO] Downloading NSSM (Non-Sucking Service Manager)..." -ForegroundColor Cyan
+        $nssmUrl = "https://nssm.cc/release/nssm-2.24.zip"
+        $zipPath = "$env:TEMP\nssm.zip"
+        $extractPath = "$env:TEMP\nssm-temp"
+        
+        try {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            Invoke-WebRequest -Uri $nssmUrl -OutFile $zipPath -UseBasicParsing
+            Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force
+            
+            # Copy 64-bit nssm.exe to install directory
+            Copy-Item -Path "$extractPath\nssm-2.24\win64\nssm.exe" -Destination $nssmPath -Force
+            
+            # Cleanup temp files
+            Remove-Item -Path $zipPath -Force
+            Remove-Item -Path $extractPath -Recurse -Force
+            Write-Host "[OK] NSSM downloaded successfully." -ForegroundColor Green
+        } catch {
+            Write-Host "[WARN] Failed to download NSSM: $($_.Exception.Message)" -ForegroundColor Yellow
+            Write-Host "       Attempting to install using standard sc.exe..." -ForegroundColor Yellow
+            $nssmPath = $null
+        }
     }
     
-    $createService = @"
-    sc create $serviceName binPath= "$nodePath $InstallPath\src\index.js" start= auto DisplayName= "$serviceDesc"
-"@
-    
-    try {
-        # Try using sc.exe directly
-        $serviceBinary = "node `"$InstallPath\src\index.js`""
-        & cmd /c "sc create $serviceName binPath= `"$serviceBinary`" start= auto DisplayName= `"$serviceDesc`"" 2>$null
-        
-        $newService = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
-        if ($newService) {
-            Write-Host "[OK] Service installed successfully!" -ForegroundColor Green
+    $exeFile = if (Test-Path "$InstallPath\dist\printserver-agent.exe") {
+        "$InstallPath\dist\printserver-agent.exe"
+    } else {
+        "$InstallPath\src\index.js"
+    }
+
+    if ($nssmPath -and (Test-Path $nssmPath)) {
+        try {
+            # Use NSSM to create and configure the service
+            if ($exeFile.EndsWith(".js")) {
+                & $nssmPath install $serviceName "node" "`"$exeFile`" --config=`"$InstallPath\config.json`""
+            } else {
+                & $nssmPath install $serviceName "$exeFile" "--config=`"$InstallPath\config.json`""
+            }
             
-            # Set service to restart on failure
-            & sc.exe failure $serviceName reset= 86400 actions= restart/5000/restart/10000/""
+            & $nssmPath set $serviceName Description "$serviceDesc"
+            & $nssmPath set $serviceName Start SERVICE_AUTO_START
+            & $nssmPath set $serviceName AppDirectory "$InstallPath"
+            
+            # Redirect logs
+            & $nssmPath set $serviceName AppStdout "$InstallPath\agent-out.log"
+            & $nssmPath set $serviceName AppStderr "$InstallPath\agent-err.log"
+            & $nssmPath set $serviceName AppRotateFiles 1
+            & $nssmPath set $serviceName AppRotateOnline 1
+            & $nssmPath set $serviceName AppRotateSeconds 86400
+            & $nssmPath set $serviceName AppRotateBytes 1048576
+            
+            # Restart action on exit
+            & $nssmPath set $serviceName AppExit Default Restart
+            & $nssmPath set $serviceName AppThrottle 1500
             
             # Start service
             Start-Service -Name $serviceName
-            Write-Host "[OK] Service started" -ForegroundColor Green
+            Write-Host "[OK] Service installed and started successfully via NSSM!" -ForegroundColor Green
+        } catch {
+            Write-Host "[ERROR] NSSM installation failed: $($_.Exception.Message)" -ForegroundColor Red
         }
-    } catch {
-        Write-Host "[WARN] Could not install as service: $($_.Exception.Message)" -ForegroundColor Yellow
-        Write-Host "       You can still run the agent manually." -ForegroundColor Cyan
+    } else {
+        # Fallback using standard Windows sc
+        try {
+            $serviceBinary = if ($exeFile.EndsWith(".js")) {
+                "node `"$exeFile`" --config=`"$InstallPath\config.json`""
+            } else {
+                "`"$exeFile`" --config=`"$InstallPath\config.json`""
+            }
+            & cmd /c "sc create $serviceName binPath= `"$serviceBinary`" start= auto DisplayName= `"$serviceDesc`"" 2>$null
+            
+            $newService = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+            if ($newService) {
+                & sc.exe failure $serviceName reset= 86400 actions= restart/5000/restart/10000/""
+                Start-Service -Name $serviceName
+                Write-Host "[OK] Service installed and started using fallback sc.exe" -ForegroundColor Green
+            }
+        } catch {
+            Write-Host "[WARN] Could not install as service: $($_.Exception.Message)" -ForegroundColor Yellow
+        }
     }
 }
 

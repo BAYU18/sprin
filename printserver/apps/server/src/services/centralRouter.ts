@@ -350,6 +350,16 @@ export class CentralPrintRouter {
                     error_message: `Failed to route to node: ${error.message}`
                 });
 
+            // Create alert record
+            await this.fastify.knex('alerts')
+                .insert({
+                    printer_id: printerId,
+                    type: 'job_failed',
+                    severity: 'error',
+                    title: 'Print Routing Failed',
+                    message: `Failed to route print job "${fileName}" to printer ID ${printerId}. Error: ${error.message}`
+                });
+
             throw new Error(`Failed to send job to node ${node.node_name}: ${error.message}`);
         }
     }

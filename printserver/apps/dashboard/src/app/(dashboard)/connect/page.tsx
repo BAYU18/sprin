@@ -86,12 +86,13 @@ const deviceInstructions = [
     icon: Globe,
     color: 'var(--accent-green)',
     instructions: [
-      'Buka Settings → Connected devices → Printing',
-      'Aktifkan Cloud Print atau Printing Service',
-      'Pilih printer dari daftar yang tersedia',
-      'Atur default printer jika perlu'
+      "Download aplikasi Let\`s Print Droid atau CUPS Printing dari Play Store",
+      'Buka aplikasi dan pilih menu "Add Printer" (Tambah Printer)',
+      'Pilih protokol "IPP" atau "IPPS" (Internet Printing)',
+      'Masukkan IPP URL Printer Anda (lihat daftar di bawah) dan simpan',
+      'Buka dokumen/foto di HP, klik Print bawaan Android, printer akan muncul otomatis!'
     ],
-    tip: 'Beberapa Android mendukung AirPrint via plugin'
+    tip: 'Gunakan protokol HTTPS (IPPS) jika mengakses dari luar jaringan / Cloudflare'
   },
   {
     platform: 'Chromebook',
@@ -541,6 +542,49 @@ export default function ConnectPage() {
               ))}
             </ol>
 
+            {activePlatform === 'Android' && (
+              <div style={{
+                marginTop: '12px',
+                padding: '12px 16px',
+                background: 'rgba(0, 255, 136, 0.05)',
+                border: '1px solid rgba(0, 255, 136, 0.2)',
+                borderRadius: '8px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                flexWrap: 'wrap',
+                gap: '12px'
+              }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                  <span style={{ fontSize: '13px', fontWeight: 'bold', color: 'var(--accent-green)' }}>Dapatkan Aplikasi APK Android Resmi:</span>
+                  <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Mencetak langsung via HP dari mana saja tanpa ribet setup.</span>
+                </div>
+                <a
+                  href="/downloads/android-apk"
+                  download="PrintServer-Mobile.apk"
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    padding: '8px 14px',
+                    background: 'var(--accent-green)',
+                    color: '#000',
+                    border: 'none',
+                    borderRadius: '6px',
+                    fontFamily: "'Rajdhani', sans-serif",
+                    fontWeight: 'bold',
+                    fontSize: '12px',
+                    textDecoration: 'none',
+                    cursor: 'pointer',
+                    boxShadow: 'var(--glow-green)'
+                  }}
+                >
+                  <Download style={{ width: '14px', height: '14px' }} />
+                  Download Mobile APK
+                </a>
+              </div>
+            )}
+
             {/* Tip Box */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 12px', background: 'rgba(245, 158, 11, 0.05)', border: '1px dashed rgba(245, 158, 11, 0.3)', borderRadius: '6px', color: 'var(--accent-amber)', fontSize: '12px', marginTop: '4px' }}>
               <Info style={{ width: '14px', height: '14px', flexShrink: 0 }} />
@@ -772,6 +816,90 @@ export default function ConnectPage() {
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             <div style={{ width: '6px', height: '6px', borderRadius: '50%', background: 'var(--accent-green)', boxShadow: 'var(--glow-green)' }} />
             <span>Hak Akses Administrator diperlukan</span>
+          </div>
+        </div>
+
+      </div>
+
+      {/* Android Mobile App Section */}
+      <div className="card" style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+        
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <div style={{ padding: '10px', background: 'rgba(0, 255, 136, 0.1)', border: '1px solid rgba(0, 255, 136, 0.2)', borderRadius: '8px', color: 'var(--accent-green)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <Smartphone style={{ width: '24px', height: '24px' }} />
+          </div>
+          <div>
+            <h2 style={{ fontSize: '18px', fontWeight: '600', color: 'var(--text-primary)', fontFamily: "'Rajdhani', sans-serif" }}>
+              Android Mobile App
+            </h2>
+            <p style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
+              Download aplikasi mobile untuk mencetak langsung dari ponsel Android Anda
+            </p>
+          </div>
+        </div>
+
+        {/* Dynamic Binary Card Box */}
+        <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: '10px', padding: '20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '16px' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', flex: 1, minWidth: '280px' }}>
+            <span style={{ fontSize: '16px', fontWeight: '600', color: 'var(--text-primary)' }}>
+              PrintServer Mobile (.apk) / PWA App
+            </span>
+            <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
+              Aplikasi mobile Android ringan untuk upload file cetak dan management printer secara langsung.
+            </span>
+            
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px', flexWrap: 'wrap' }}>
+              <span style={{ fontSize: '11px', fontFamily: "'Share Tech Mono', monospace", color: 'var(--accent-green)', background: 'rgba(0, 255, 136, 0.08)', border: '1px solid rgba(0, 255, 136, 0.2)', padding: '2px 8px', borderRadius: '4px' }}>
+                Format: APK & PWA
+              </span>
+              <span style={{ fontSize: '11px', fontFamily: "'Share Tech Mono', monospace", color: 'var(--text-muted)', background: 'rgba(74, 96, 128, 0.1)', padding: '2px 8px', borderRadius: '4px' }}>
+                Ukuran: ~2.5 MB
+              </span>
+              <span style={{ fontSize: '11px', fontFamily: "'Share Tech Mono', monospace", color: 'var(--text-muted)', background: 'rgba(74, 96, 128, 0.1)', padding: '2px 8px', borderRadius: '4px' }}>
+                Android 8.0+
+              </span>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', minWidth: '220px' }}>
+            <a
+              href="/downloads/android-apk"
+              download="PrintServer-Mobile.apk"
+              style={hoveredEl === 'dl-apk' ? { ...cyberBtnStyle, ...cyberBtnHoverStyle, borderColor: 'var(--accent-green)', color: 'var(--accent-green)' } : { ...cyberBtnStyle, borderColor: 'rgba(0, 255, 136, 0.3)', color: 'rgba(0, 255, 136, 0.9)' }}
+              onMouseEnter={() => setHoveredEl('dl-apk')}
+              onMouseLeave={() => setHoveredEl(null)}
+            >
+              <Download style={{ width: '16px', height: '16px' }} />
+              <span>Download App (.apk)</span>
+            </a>
+          </div>
+        </div>
+
+        {/* Info Installation Guide */}
+        <div style={{ background: 'rgba(0, 255, 136, 0.05)', border: '1px solid rgba(0, 255, 136, 0.2)', borderRadius: '8px', padding: '16px', display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
+          <Info style={{ width: '20px', height: '20px', color: 'var(--accent-green)', flexShrink: 0, marginTop: '2px' }} />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            <span style={{ fontSize: '14px', fontWeight: '600', color: 'var(--accent-green)', fontFamily: "'Rajdhani', sans-serif", textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+              Dua Cara Instalasi di Android:
+            </span>
+            <div style={{ fontSize: '13px', color: 'rgba(255, 255, 255, 0.75)', lineHeight: '1.5', display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '6px' }}>
+              <div>
+                <strong>Metode 1: Download & Install APK (Rekomendasi)</strong>
+                <ol style={{ paddingLeft: '16px', margin: '4px 0 0 0', listStyleType: 'none' }}>
+                  <li>1. Unduh berkas <code style={{ background: 'var(--bg-primary)', padding: '1px 4px', borderRadius: '3px', color: 'var(--accent-green)' }}>.apk</code> di atas.</li>
+                  <li>2. Buka berkas unduhan di HP dan klik <strong>Install</strong> (Izinkan instalasi dari sumber tidak dikenal jika diminta).</li>
+                  <li>3. Buka aplikasi, masukkan URL Server: <code style={{ background: 'var(--bg-primary)', padding: '1px 4px', borderRadius: '3px', color: 'var(--accent-green)' }}>http://{serverInfo.ip}:{serverInfo.port}</code> untuk mulai mencetak.</li>
+                </ol>
+              </div>
+              <div>
+                <strong>Metode 2: Menggunakan PWA (Tanpa Unduhan File)</strong>
+                <ol style={{ paddingLeft: '16px', margin: '4px 0 0 0', listStyleType: 'none' }}>
+                  <li>1. Buka browser Chrome di Android, akses URL Server: <code style={{ background: 'var(--bg-primary)', padding: '1px 4px', borderRadius: '3px', color: 'var(--accent-green)' }}>http://{serverInfo.ip}:{serverInfo.port}</code></li>
+                  <li>2. Klik menu titik tiga Chrome di kanan atas, lalu pilih <strong>"Add to Home screen"</strong> (Tambahkan ke Layar Utama).</li>
+                  <li>3. Aplikasi web PrintServer akan langsung terpasang di menu HP Android Anda.</li>
+                </ol>
+              </div>
+            </div>
           </div>
         </div>
 

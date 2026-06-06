@@ -1,0 +1,5 @@
+n
+/usr/lib/jvm/java-17-openjdk-amd64
+y
+/root/android-sdk
+y

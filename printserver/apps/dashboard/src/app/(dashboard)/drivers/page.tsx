@@ -73,10 +73,11 @@ export default function DriversPage() {
         loadData();
     }, [loadData]);
 
-    const handleAddDriver = async (data: Partial<Driver>) => {
+    const handleAddDriver = async (data: any) => {
         setError(null);
         try {
-            const r = await fetch(`${API_URL}/api/drivers`, {
+            const url = data.fileData ? `${API_URL}/api/drivers/upload` : `${API_URL}/api/drivers`;
+            const r = await fetch(url, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(data),
@@ -85,7 +86,7 @@ export default function DriversPage() {
                 const err = await r.json();
                 throw new Error(err.error || 'Failed to add');
             }
-            setSuccess(`Driver "${data.name}" added`);
+            setSuccess(data.fileData ? `Driver ZIP "${data.name}" uploaded successfully` : `Driver "${data.name}" added`);
             setShowAddModal(false);
             loadData();
             setTimeout(() => setSuccess(null), 3000);
@@ -532,6 +533,66 @@ function AddDriverModal({ onClose, onSubmit }: { onClose: () => void; onSubmit: 
     const [downloadUrl, setDownloadUrl] = useState('');
     const [installInstructions, setInstallInstructions] = useState('');
 
+    const [uploadMethod, setUploadMethod] = useState<'url' | 'file'>('url');
+    const [file, setFile] = useState<File | null>(null);
+    const [fileBase64, setFileBase64] = useState<string>('');
+    const [readingFile, setReadingFile] = useState(false);
+
+    const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const selectedFile = e.target.files?.[0];
+        if (!selectedFile) return;
+
+        setFile(selectedFile);
+        setReadingFile(true);
+
+        const reader = new FileReader();
+        reader.onload = (event) => {
+            const base64String = (event.target?.result as string).split(',')[1];
+            setFileBase64(base64String);
+            setReadingFile(false);
+            
+            // Auto fill driver name if empty
+            if (!name) {
+                const cleanName = selectedFile.name.replace(/\.[^/.]+$/, "").replace(/_/g, " ");
+                setName(cleanName);
+            }
+        };
+        reader.onerror = () => {
+            alert('Failed to read file');
+            setReadingFile(false);
+        };
+        reader.readAsDataURL(selectedFile);
+    };
+
+    const handleSave = () => {
+        if (!name.trim()) return;
+
+        if (uploadMethod === 'file') {
+            if (!file || !fileBase64) {
+                alert('Please select a ZIP driver file first');
+                return;
+            }
+            onSubmit({
+                name,
+                manufacturer,
+                description,
+                install_instructions: installInstructions,
+                filename: file.name,
+                fileData: fileBase64
+            });
+        } else {
+            onSubmit({
+                name,
+                manufacturer,
+                description,
+                download_url: downloadUrl,
+                install_instructions: installInstructions
+            });
+        }
+    };
+
+    const isSubmitDisabled = !name.trim() || readingFile || (uploadMethod === 'file' && !file);
+
     return (
         <div
             style={{
@@ -578,7 +639,93 @@ function AddDriverModal({ onClose, onSubmit }: { onClose: () => void; onSubmit: 
                         ×
                     </button>
                 </div>
+
+                {/* Tab selector */}
+                <div style={{ display: 'flex', borderBottom: '1px solid var(--border)', marginBottom: '8px' }}>
+                    <button
+                        onClick={() => setUploadMethod('url')}
+                        style={{
+                            flex: 1,
+                            padding: '10px',
+                            background: 'transparent',
+                            border: 'none',
+                            color: uploadMethod === 'url' ? 'var(--accent-cyan)' : 'var(--text-muted)',
+                            borderBottom: uploadMethod === 'url' ? '2px solid var(--accent-cyan)' : 'none',
+                            fontSize: '13px',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                            textTransform: 'uppercase',
+                            letterSpacing: '0.5px'
+                        }}
+                    >
+                        Remote URL Link
+                    </button>
+                    <button
+                        onClick={() => setUploadMethod('file')}
+                        style={{
+                            flex: 1,
+                            padding: '10px',
+                            background: 'transparent',
+                            border: 'none',
+                            color: uploadMethod === 'file' ? 'var(--accent-cyan)' : 'var(--text-muted)',
+                            borderBottom: uploadMethod === 'file' ? '2px solid var(--accent-cyan)' : 'none',
+                            fontSize: '13px',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                            textTransform: 'uppercase',
+                            letterSpacing: '0.5px'
+                        }}
+                    >
+                        Upload ZIP File
+                    </button>
+                </div>
+
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                    {uploadMethod === 'file' ? (
+                        <div>
+                            <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1px', display: 'block', marginBottom: '6px' }}>
+                                Select Driver ZIP File *
+                            </label>
+                            <input
+                                type="file"
+                                accept=".zip"
+                                onChange={handleFileChange}
+                                style={{
+                                    width: '100%',
+                                    padding: '10px',
+                                    border: '1px dashed var(--border)',
+                                    background: 'var(--bg-secondary)',
+                                    borderRadius: '8px',
+                                    color: 'var(--text-primary)',
+                                    fontSize: '13px',
+                                    cursor: 'pointer'
+                                }}
+                            />
+                            {readingFile && (
+                                <p style={{ fontSize: '11px', color: 'var(--accent-cyan)', marginTop: '6px' }}>
+                                    Processing and encoding ZIP archive...
+                                </p>
+                            )}
+                            {file && !readingFile && (
+                                <p style={{ fontSize: '11px', color: 'var(--accent-green)', marginTop: '6px' }}>
+                                    Selected: {file.name} ({(file.size / (1024 * 1024)).toFixed(2)} MB)
+                                </p>
+                            )}
+                        </div>
+                    ) : (
+                        <div>
+                            <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1px', display: 'block', marginBottom: '6px' }}>Download URL</label>
+                            <input
+                                type="url"
+                                value={downloadUrl}
+                                onChange={e => setDownloadUrl(e.target.value)}
+                                placeholder="https://manufacturer.com/drivers/..."
+                                className="input"
+                                style={{ height: '40px', fontSize: '14px' }}
+                            />
+                        </div>
+                    )}
+
                     <div>
                         <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1px', display: 'block', marginBottom: '6px' }}>Driver Name *</label>
                         <input
@@ -588,7 +735,6 @@ function AddDriverModal({ onClose, onSubmit }: { onClose: () => void; onSubmit: 
                             placeholder="e.g. HP LaserJet M404"
                             className="input"
                             style={{ height: '40px', fontSize: '14px' }}
-                            autoFocus
                         />
                         <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>The exact name as it appears in Windows 'Print Management'</p>
                     </div>
@@ -612,17 +758,6 @@ function AddDriverModal({ onClose, onSubmit }: { onClose: () => void; onSubmit: 
                             className="input"
                             style={{ minHeight: '60px', fontSize: '14px', resize: 'vertical' }}
                             rows={2}
-                        />
-                    </div>
-                    <div>
-                        <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1px', display: 'block', marginBottom: '6px' }}>Download URL</label>
-                        <input
-                            type="url"
-                            value={downloadUrl}
-                            onChange={e => setDownloadUrl(e.target.value)}
-                            placeholder="https://manufacturer.com/drivers/..."
-                            className="input"
-                            style={{ height: '40px', fontSize: '14px' }}
                         />
                     </div>
                     <div>
@@ -659,20 +794,17 @@ function AddDriverModal({ onClose, onSubmit }: { onClose: () => void; onSubmit: 
                         Cancel
                     </button>
                     <button
-                        onClick={() => {
-                            if (!name.trim()) return;
-                            onSubmit({ name, manufacturer, description, download_url: downloadUrl, install_instructions: installInstructions });
-                        }}
-                        disabled={!name.trim()}
+                        onClick={handleSave}
+                        disabled={isSubmitDisabled}
                         className="btn-primary"
                         style={{
-                            opacity: name.trim() ? 1 : 0.5,
-                            pointerEvents: name.trim() ? 'auto' : 'none',
+                            opacity: isSubmitDisabled ? 0.5 : 1,
+                            pointerEvents: isSubmitDisabled ? 'none' : 'auto',
                             padding: '8px 16px',
                             fontSize: '13px'
                         }}
                     >
-                        Add Driver
+                        {uploadMethod === 'file' ? 'Upload & Add' : 'Add Driver'}
                     </button>
                 </div>
             </div>

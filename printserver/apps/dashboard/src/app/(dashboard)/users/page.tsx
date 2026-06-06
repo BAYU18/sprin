@@ -31,6 +31,11 @@ const roleStyles: Record<string, { bg: string; text: string; border: string }> =
 export default function UsersPage() {
   const [users, setUsers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  
+  // Modal states
+  const [showModal, setShowModal] = useState(false);
+  const [selectedUser, setSelectedUser] = useState<any | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const fetchUsers = async () => {
     try {
@@ -65,6 +70,23 @@ export default function UsersPage() {
       setUsers(prev => prev.map(u => u.id === user.id ? { ...u, is_active: updatedStatus } : u));
     } catch (error) {
       console.error('Failed to toggle status:', error);
+    }
+  };
+
+  const handleSaveUser = async (data: any) => {
+    setError(null);
+    try {
+      if (selectedUser) {
+        // Edit mode
+        await usersApi.update(selectedUser.id, data);
+      } else {
+        // Add mode
+        await usersApi.create(data);
+      }
+      setShowModal(false);
+      fetchUsers();
+    } catch (err: any) {
+      setError(err.response?.data?.error || err.message || 'Failed to save user');
     }
   };
 
@@ -168,7 +190,7 @@ export default function UsersPage() {
               borderColor: 'rgba(0, 255, 136, 0.3)',
               color: 'var(--accent-green)'
             }}
-            onClick={() => alert('Add User triggered')}
+            onClick={() => { setSelectedUser(null); setError(null); setShowModal(true); }}
           >
             <UserPlus size={16} />
             Add User
@@ -295,7 +317,7 @@ export default function UsersPage() {
               borderColor: 'rgba(0, 255, 136, 0.3)',
               color: 'var(--accent-green)'
             }}
-            onClick={() => alert('Add User triggered')}
+            onClick={() => { setSelectedUser(null); setError(null); setShowModal(true); }}
           >
             <UserPlus size={16} />
             Create First User
@@ -477,7 +499,7 @@ export default function UsersPage() {
                       <td style={{ padding: '12px 16px' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                           <button
-                            onClick={() => alert(`Edit User ${user.username} triggered`)}
+                            onClick={() => { setSelectedUser(user); setError(null); setShowModal(true); }}
                             style={{
                               background: 'rgba(0, 212, 255, 0.05)',
                               border: '1px solid rgba(0, 212, 255, 0.15)',
@@ -536,6 +558,241 @@ export default function UsersPage() {
           </div>
         </div>
       )}
+
+      {showModal && (
+        <AddEditUserModal
+          user={selectedUser}
+          error={error}
+          onClose={() => setShowModal(false)}
+          onSubmit={handleSaveUser}
+        />
+      )}
+    </div>
+  );
+}
+
+interface AddEditUserModalProps {
+  user: any | null;
+  error: string | null;
+  onClose: () => void;
+  onSubmit: (data: any) => void;
+}
+
+function AddEditUserModal({ user, error, onClose, onSubmit }: AddEditUserModalProps) {
+  const [username, setUsername] = useState(user?.username || '');
+  const [password, setPassword] = useState('');
+  const [fullName, setFullName] = useState(user?.full_name || '');
+  const [email, setEmail] = useState(user?.email || '');
+  const [role, setRole] = useState(user?.role || 'user');
+  const [department, setDepartment] = useState(user?.department || '');
+  const [quotaPages, setQuotaPages] = useState(user?.quota_pages || 1000);
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!username.trim()) return;
+    
+    const data: any = {
+      username,
+      full_name: fullName,
+      email,
+      role,
+      department,
+      quota_pages: Number(quotaPages)
+    };
+
+    // Only add password if filled (or required for new user)
+    if (password) {
+      data.password = password;
+    }
+
+    onSubmit(data);
+  };
+
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        backgroundColor: 'rgba(0, 0, 0, 0.75)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 999,
+        padding: '16px',
+        backdropFilter: 'blur(4px)'
+      }}
+      onClick={onClose}
+    >
+      <form
+        onSubmit={handleSubmit}
+        className="card"
+        style={{
+          width: '100%',
+          maxWidth: '500px',
+          background: 'var(--bg-card)',
+          border: '1px solid var(--border)',
+          borderRadius: '12px',
+          padding: '24px',
+          position: 'relative',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '16px'
+        }}
+        onClick={e => e.stopPropagation()}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--border)', paddingBottom: '12px' }}>
+          <h3 style={{ fontSize: '18px', fontWeight: 600, color: 'var(--text-primary)', fontFamily: 'Rajdhani, sans-serif', margin: 0, textTransform: 'uppercase', letterSpacing: '1px' }}>
+            {user ? 'Edit User Parameters' : 'Register New User'}
+          </h3>
+          <button
+            type="button"
+            onClick={onClose}
+            style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', fontSize: '20px', cursor: 'pointer' }}
+          >
+            ×
+          </button>
+        </div>
+
+        {error && (
+          <div style={{
+            background: 'rgba(255, 61, 90, 0.1)',
+            border: '1px solid rgba(255, 61, 90, 0.3)',
+            color: 'var(--accent-red)',
+            padding: '10px 12px',
+            borderRadius: '6px',
+            fontSize: '13px'
+          }}>
+            {error}
+          </div>
+        )}
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+          <div>
+            <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1px', display: 'block', marginBottom: '6px' }}>Username *</label>
+            <input
+              type="text"
+              value={username}
+              onChange={e => setUsername(e.target.value)}
+              className="input"
+              style={{ height: '38px', fontSize: '13px' }}
+              disabled={!!user}
+              required
+            />
+          </div>
+          <div>
+            <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1px', display: 'block', marginBottom: '6px' }}>
+              {user ? 'New Password (Optional)' : 'Password *'}
+            </label>
+            <input
+              type="password"
+              value={password}
+              onChange={e => setPassword(e.target.value)}
+              className="input"
+              style={{ height: '38px', fontSize: '13px' }}
+              required={!user}
+            />
+          </div>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+          <div>
+            <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1px', display: 'block', marginBottom: '6px' }}>Full Name</label>
+            <input
+              type="text"
+              value={fullName}
+              onChange={e => setFullName(e.target.value)}
+              className="input"
+              style={{ height: '38px', fontSize: '13px' }}
+            />
+          </div>
+          <div>
+            <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1px', display: 'block', marginBottom: '6px' }}>Email</label>
+            <input
+              type="email"
+              value={email}
+              onChange={e => setEmail(e.target.value)}
+              className="input"
+              style={{ height: '38px', fontSize: '13px' }}
+            />
+          </div>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+          <div>
+            <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1px', display: 'block', marginBottom: '6px' }}>Role</label>
+            <select
+              value={role}
+              onChange={e => setRole(e.target.value)}
+              className="input"
+              style={{ height: '38px', fontSize: '13px', cursor: 'pointer' }}
+            >
+              <option value="user">User</option>
+              <option value="operator">Operator</option>
+              <option value="admin">Admin</option>
+              <option value="super_admin">Super Admin</option>
+            </select>
+          </div>
+          <div>
+            <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1px', display: 'block', marginBottom: '6px' }}>Department</label>
+            <input
+              type="text"
+              value={department}
+              onChange={e => setDepartment(e.target.value)}
+              className="input"
+              style={{ height: '38px', fontSize: '13px' }}
+            />
+          </div>
+        </div>
+
+        <div>
+          <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1px', display: 'block', marginBottom: '6px' }}>Allocated Quota Pages</label>
+          <input
+            type="number"
+            value={quotaPages}
+            onChange={e => setQuotaPages(Number(e.target.value))}
+            className="input"
+            style={{ height: '38px', fontSize: '13px' }}
+            min={0}
+          />
+        </div>
+
+        <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', borderTop: '1px solid var(--border)', paddingTop: '16px', marginTop: '8px' }}>
+          <button
+            type="button"
+            onClick={onClose}
+            style={{
+              background: 'transparent',
+              border: '1px solid var(--border)',
+              color: 'var(--text-primary)',
+              padding: '8px 16px',
+              borderRadius: '8px',
+              cursor: 'pointer',
+              fontWeight: 600,
+              fontSize: '13px',
+              textTransform: 'uppercase',
+              letterSpacing: '1px',
+              transition: 'all 0.2s'
+            }}
+            onMouseEnter={e => { e.currentTarget.style.background = 'var(--bg-hover)'; e.currentTarget.style.borderColor = 'var(--border-hover)'; }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.borderColor = 'var(--border)'; }}
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            className="btn-primary"
+            style={{
+              padding: '8px 16px',
+              fontSize: '13px'
+            }}
+          >
+            {user ? 'Save Changes' : 'Create User'}
+          </button>
+        </div>
+      </form>
     </div>
   );
 }

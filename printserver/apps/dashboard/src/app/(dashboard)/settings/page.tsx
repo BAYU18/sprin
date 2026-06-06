@@ -2,10 +2,10 @@
 
 import { useEffect, useState } from 'react';
 import { settings as settingsApi } from '@/lib/api';
-import { Save, RefreshCw, Mail, Bell, Shield, Key, FileText, Check, AlertTriangle } from 'lucide-react';
+import { Save, RefreshCw, Mail, Bell, Shield, Key, FileText, Check, AlertTriangle, Database, Download, FolderOpen, Info } from 'lucide-react';
 import PaperManager from '@/components/PaperManager';
 
-type TabType = 'general' | 'smtp' | 'security' | 'defaults';
+type TabType = 'general' | 'smtp' | 'security' | 'defaults' | 'backup';
 
 export default function SettingsPage() {
   const [settings, setSettings] = useState<Record<string, string>>({});
@@ -13,6 +13,11 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [activeTab, setActiveTab] = useState<TabType>('general');
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  // Backup state
+  const [backups, setBackups] = useState<{ filename: string; size: string; createdAt: string }[]>([]);
+  const [backupLoading, setBackupLoading] = useState(false);
+  const [triggeringBackup, setTriggeringBackup] = useState(false);
 
   const fetchSettings = async () => {
     try {
@@ -25,9 +30,49 @@ export default function SettingsPage() {
     }
   };
 
+  const fetchBackups = async () => {
+    setBackupLoading(true);
+    try {
+      const response = await fetch('/api/settings/backup/list');
+      if (response.ok) {
+        const data = await response.json();
+        setBackups(data);
+      }
+    } catch (err) {
+      console.error('Failed to fetch backups list:', err);
+    } finally {
+      setBackupLoading(false);
+    }
+  };
+
   useEffect(() => {
     fetchSettings();
   }, []);
+
+  useEffect(() => {
+    if (activeTab === 'backup') {
+      fetchBackups();
+    }
+  }, [activeTab]);
+
+  const handleTriggerBackup = async () => {
+    setTriggeringBackup(true);
+    try {
+      const response = await fetch('/api/settings/backup/trigger', { method: 'POST' });
+      if (response.ok) {
+        const result = await response.json();
+        setMessage({ type: 'success', text: `Backup generated successfully: ${result.filename}` });
+        fetchBackups();
+      } else {
+        setMessage({ type: 'error', text: 'Failed to generate backup' });
+      }
+    } catch (err) {
+      setMessage({ type: 'error', text: 'Failed to trigger backup' });
+    } finally {
+      setTriggeringBackup(false);
+      setTimeout(() => setMessage(null), 3000);
+    }
+  };
 
   const handleSave = async () => {
     setSaving(true);
@@ -60,6 +105,7 @@ export default function SettingsPage() {
     { id: 'smtp', label: 'Email Alerts', icon: Mail, desc: 'SMTP & recipients' },
     { id: 'security', label: 'Security', icon: Shield, desc: 'Rate limit & sessions' },
     { id: 'defaults', label: 'Print Defaults', icon: FileText, desc: 'Paper sizes configuration' },
+    { id: 'backup', label: 'Backup & Restore', icon: Database, desc: 'Database dump & restore tools' },
   ];
 
   return (
@@ -420,6 +466,106 @@ export default function SettingsPage() {
               {/* Embed PaperManager component directly */}
               <div style={{ marginTop: '8px' }}>
                 <PaperManager />
+              </div>
+            </div>
+          )}
+
+          {/* BACKUP & RESTORE TAB */}
+          {activeTab === 'backup' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', paddingBottom: '16px', borderBottom: '1px solid var(--border)' }}>
+                <Database style={{ color: 'var(--accent-cyan)' }} size={20} />
+                <div>
+                  <h2 style={{ fontSize: '16px', fontWeight: 750, fontFamily: "'Rajdhani', sans-serif", margin: 0, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Backup & Database Migration</h2>
+                  <p style={{ fontSize: '11px', color: 'var(--text-muted)', margin: 0 }}>Ekspor database PostgreSQL, data printer, dan konfigurasi agen ke berkas backup</p>
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', background: 'var(--bg-secondary)', border: '1px solid var(--border)', borderRadius: '10px', padding: '20px', gap: '16px', flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', flex: 1 }}>
+                  <span style={{ fontSize: '15px', fontWeight: '600', color: 'var(--text-primary)' }}>Backup Manual Database & Konfigurasi</span>
+                  <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Proses ini akan mengemas seluruh skema SQL, setelan printer, dan log alerts ke dalam berkas .tar.gz terkompresi.</span>
+                </div>
+                <button
+                  onClick={handleTriggerBackup}
+                  disabled={triggeringBackup}
+                  className="btn-primary"
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', cursor: 'pointer', background: 'var(--accent-cyan)', borderColor: 'var(--accent-cyan)', color: '#000' }}
+                >
+                  {triggeringBackup ? (
+                    <RefreshCw size={16} style={{ animation: 'spin 0.8s linear infinite' }} />
+                  ) : (
+                    <Database size={16} />
+                  )}
+                  {triggeringBackup ? 'Generating...' : 'Backup Now'}
+                </button>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '10px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <h3 style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)', fontFamily: "'Rajdhani', sans-serif", textTransform: 'uppercase', letterSpacing: '0.5px' }}>Riwayat Berkas Backup di Server</h3>
+                  <button onClick={fetchBackups} disabled={backupLoading} style={{ background: 'transparent', border: 'none', color: 'var(--accent-cyan)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px' }}>
+                    <RefreshCw size={12} style={{ animation: backupLoading ? 'spin 1s linear' : 'none' }} /> Refresh
+                  </button>
+                </div>
+
+                {backupLoading ? (
+                  <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100px', border: '1px solid var(--border)', borderRadius: '8px' }}>
+                    <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>Loading backups...</span>
+                  </div>
+                ) : backups.length === 0 ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', height: '100px', border: '1px dashed var(--border)', borderRadius: '8px', gap: '8px' }}>
+                    <FolderOpen size={24} style={{ color: 'var(--text-dim)' }} />
+                    <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>Belum ada berkas backup yang tersimpan di server.</span>
+                  </div>
+                ) : (
+                  <div style={{ border: '1px solid var(--border)', borderRadius: '8px', overflow: 'hidden' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px', textAlign: 'left' }}>
+                      <thead>
+                        <tr style={{ background: 'rgba(255, 255, 255, 0.02)', borderBottom: '1px solid var(--border)' }}>
+                          <th style={{ padding: '10px 12px', color: 'var(--text-muted)', fontWeight: 600 }}>NAMA FILE BACKUP</th>
+                          <th style={{ padding: '10px 12px', color: 'var(--text-muted)', fontWeight: 600 }}>UKURAN</th>
+                          <th style={{ padding: '10px 12px', color: 'var(--text-muted)', fontWeight: 600 }}>TANGGAL BUAT</th>
+                          <th style={{ padding: '10px 12px', color: 'var(--text-muted)', fontWeight: 600, textAlign: 'center' }}>AKSI</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {backups.map((b) => (
+                          <tr key={b.filename} style={{ borderBottom: '1px solid var(--border)', transition: 'background 0.2s' }} className="hover-row">
+                            <td style={{ padding: '10px 12px', fontFamily: "'Share Tech Mono', monospace", color: 'var(--text-primary)' }}>{b.filename}</td>
+                            <td style={{ padding: '10px 12px', color: 'var(--text-muted)' }}>{b.size}</td>
+                            <td style={{ padding: '10px 12px', color: 'var(--text-muted)' }}>{new Date(b.createdAt).toLocaleString('id-ID')}</td>
+                            <td style={{ padding: '10px 12px', textAlign: 'center' }}>
+                              <a
+                                href={`/api/settings/backup/download/${b.filename}`}
+                                download
+                                style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: 'var(--accent-green)', textDecoration: 'none', fontWeight: 600, fontSize: '12px' }}
+                              >
+                                <Download size={14} /> Download
+                              </a>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+
+              <div style={{
+                display: 'flex', alignItems: 'flex-start', gap: '12px',
+                padding: '16px', borderRadius: '8px', background: 'rgba(0, 255, 136, 0.05)',
+                border: '1px solid rgba(0, 255, 136, 0.2)', marginTop: '12px'
+              }}>
+                <Info size={18} style={{ color: 'var(--accent-green)', flexShrink: 0, marginTop: '2px' }} />
+                <div>
+                  <h4 style={{ fontSize: '13px', fontWeight: 700, color: 'var(--accent-green)', fontFamily: "'Rajdhani', sans-serif", margin: '0 0 4px 0', textTransform: 'uppercase' }}>
+                    Sistem Backup Harian
+                  </h4>
+                  <p style={{ fontSize: '11px', color: 'var(--text-muted)', margin: 0, lineHeight: 1.5 }}>
+                    Sistem secara otomatis melakukan backup database dan konfigurasi <strong>setiap hari pukul 02:00 pagi</strong>. Berkas backup yang berumur <strong>lebih dari 14 hari</strong> akan otomatis dibersihkan demi menghemat ruang penyimpanan server.
+                  </p>
+                </div>
               </div>
             </div>
           )}

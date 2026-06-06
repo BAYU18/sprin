@@ -44,6 +44,10 @@ export const BUILTIN_PAPER_SIZES: PaperSize[] = [
     { name: 'Folio',   widthMm: 210,  heightMm: 330,  builtin: true },  // F4 Indonesia
     { name: 'F4',      widthMm: 215.9, heightMm: 330.2, builtin: true }, // F4/Folusio
     { name: 'Statement', widthMm: 139.7, heightMm: 215.9, builtin: true },
+    { name: 'Kertas Kwitansi', widthMm: 210,    heightMm: 139.5, builtin: true },
+    { name: 'Kertas SEP',      widthMm: 210.7,  heightMm: 90.7,  builtin: true },
+    { name: 'Kertas Label Besar', widthMm: 60.5, heightMm: 50,    builtin: true },
+    { name: 'Kertas Label Kecil', widthMm: 60.5, heightMm: 20,    builtin: true },
 ];
 
 const DEFAULT_PAPER_NAME = 'A4';

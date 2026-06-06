@@ -6,7 +6,7 @@ import { on, off } from '@/hooks/useSocket';
 import {
   AlertTriangle, RefreshCw, CheckCircle, XCircle,
   Bell, Trash2, Filter, ShieldAlert, AlertCircle,
-  Info, Check, ShieldCheck, Eye, EyeOff
+  Info, Check, ShieldCheck, Eye, EyeOff, Wrench
 } from 'lucide-react';
 import { format } from 'date-fns';
 
@@ -26,6 +26,7 @@ const iconColors: Record<string, string> = {
 
 const typeIcons: Record<string, any> = {
   printer_offline: XCircle,
+  hardware_error: Wrench,
   queue_overload: AlertTriangle,
   job_failed: AlertTriangle,
   client_offline: AlertTriangle,

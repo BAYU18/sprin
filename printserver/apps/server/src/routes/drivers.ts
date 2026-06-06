@@ -87,6 +87,58 @@ export async function setupDriversRoutes(fastify: FastifyInstance) {
         return driver;
     });
 
+    // ── Upload new driver ZIP ────────────────────────────────────────────────
+    fastify.post('/api/drivers/upload', async (request: FastifyRequest, reply: FastifyReply) => {
+        const uploadSchema = z.object({
+            name: z.string().min(1).max(255),
+            manufacturer: z.string().max(255).optional(),
+            description: z.string().optional(),
+            install_instructions: z.string().optional(),
+            filename: z.string().min(1),
+            fileData: z.string() // base64 string
+        });
+
+        const body = uploadSchema.parse(request.body);
+
+        const existing = await fastify.knex('printer_drivers').where({ name: body.name }).first();
+        if (existing) {
+            return reply.status(409).send({ error: 'Driver with this name already exists', id: existing.id });
+        }
+
+        // Simpan file ke disk
+        const fs = await import('fs');
+        const path = await import('path');
+        const fileBuffer = Buffer.from(body.fileData, 'base64');
+        
+        // Buat nama file aman
+        const safeFilename = `${Date.now()}_${body.filename.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+        // Path absolut ke public/drivers
+        const uploadDir = path.resolve('/root/serverbot/print/printserver/apps/server/public/drivers');
+        const fullPath = path.join(uploadDir, safeFilename);
+
+        // Tulis file
+        fs.writeFileSync(fullPath, fileBuffer);
+
+        // Buat download url relative
+        const downloadUrl = `/drivers/${safeFilename}`;
+
+        const [driver] = await fastify.knex('printer_drivers')
+            .insert({
+                name: body.name,
+                manufacturer: body.manufacturer || null,
+                description: body.description || null,
+                install_instructions: body.install_instructions || null,
+                download_url: downloadUrl,
+                is_builtin: false,
+                updated_at: new Date(),
+            })
+            .returning('*');
+
+        fastify.io?.emit('driver:created', driver);
+        logger.info(`[Drivers] Uploaded and created driver: ${driver.name} -> ${downloadUrl}`);
+        return driver;
+    });
+
     // ── Update driver ───────────────────────────────────────────────────────
     fastify.put('/api/drivers/:id', async (request: FastifyRequest, reply: FastifyReply) => {
         const { id } = request.params as { id: string };

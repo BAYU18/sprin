@@ -139,6 +139,16 @@ async function checkStuckJobs(fastify: any) {
                 .where({ print_job_id: job.id })
                 .update({ status: 'cancelled' });
 
+            // Create alert record for stuck job
+            await fastify.knex('alerts')
+                .insert({
+                    printer_id: job.printer_id,
+                    type: 'job_failed',
+                    severity: 'warning',
+                    title: 'Job Stuck Cancelled',
+                    message: `Print job "${job.job_name || job.file_name}" cancelled automatically after 3 failed attempts (stuck in queue).`
+                });
+
             fastify.io?.emit('job:cancelled', { jobId: job.job_id, reason: 'stuck' });
         }
     }

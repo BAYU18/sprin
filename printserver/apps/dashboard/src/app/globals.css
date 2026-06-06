@@ -1180,38 +1180,15 @@ body {
 
 @media (max-width: 1024px) {
   .sidebar {
-    width: 70px;
+    transform: translateX(-100%);
   }
   
-  .sidebar-header {
-    padding: 16px 10px;
-    display: flex;
-    justify-content: center;
-  }
-  
-  .logo span,
-  .nav-item span,
-  .sidebar-footer {
-    display: none;
+  .sidebar.open {
+    transform: translateX(0);
   }
   
   .main-content {
-    margin-left: 70px;
-  }
-  
-  .logo-icon {
-    width: 36px;
-    height: 36px;
-  }
-  
-  .nav-item {
-    justify-content: center;
-    padding: 16px 12px;
-  }
-  
-  .nav-item svg {
-    width: 24px;
-    height: 24px;
+    margin-left: 0;
   }
   
   .header-title {
@@ -1230,6 +1207,10 @@ body {
   .bottom-panels {
     grid-template-columns: 1fr;
   }
+  
+  .mobile-menu-toggle {
+    display: flex;
+  }
 }
 
 /* ==========================================
@@ -1238,14 +1219,37 @@ body {
 
 @media (max-width: 768px) {
   .sidebar {
-    width: 260px;
+    width: 280px;
     transform: translateX(-100%);
   }
 
   .sidebar.open {
     transform: translateX(0);
   }
+
+  /* KEMBALIKAN TEKS DAN GAYA NORMAL PADA DRAWER MOBILE */
+  .logo span,
+  .nav-item span,
+  .sidebar-footer {
+    display: block !important;
+  }
   
+  .sidebar-header {
+    padding: 24px;
+    justify-content: flex-start !important;
+  }
+
+  .nav-item {
+    justify-content: flex-start !important;
+    padding: 16px 24px !important;
+    gap: 16px !important;
+  }
+  
+  .nav-item svg {
+    width: 24px !important;
+    height: 24px !important;
+  }
+
   .main-content {
     margin-left: 0;
   }
@@ -1314,63 +1318,49 @@ body {
     flex-direction: column;
   }
   
+  /* Inherits sidebar Drawer behavior from 768px */
   .sidebar {
-    width: 100%;
-    height: auto;
-    min-height: auto;
-    flex-direction: row;
-    position: fixed;
-    bottom: 0;
-    top: auto;
-    left: 0;
-    right: 0;
-    transform: translateY(100%);
-    border-right: none;
-    border-top: 1px solid var(--border);
-    z-index: 100;
+    width: 280px; /* Lebarkan drawer untuk touch di HP */
+    transform: translateX(-100%);
   }
   
   .sidebar.open {
-    transform: translateY(0);
+    transform: translateX(0);
   }
   
   .sidebar-header {
-    display: none;
-  }
-  
-  .sidebar-nav {
-    display: flex;
-    padding: 8px;
-    justify-content: space-around;
-    width: 100%;
+    padding: 24px;
+    justify-content: flex-start;
   }
   
   .nav-item {
-    flex-direction: column;
-    padding: 10px 8px;
-    gap: 4px;
-    border-left: none;
-    border-bottom: 2px solid transparent;
-    border-radius: 8px;
+    padding: 16px 24px;
+    font-size: 16px; /* Font lebih besar di HP */
+    gap: 16px;
+    justify-content: flex-start; /* Rapikan kembali ke sisi kiri */
   }
-  
+
   .nav-item span {
-    display: block;
-    font-size: 10px;
+    display: block; /* MUNCULKAN KEMBALI TEKS MENU DI MOBILE */
   }
-  
-  .sidebar-footer {
-    display: none;
+
+  .logo span {
+    display: block; /* Munculkan teks logo "PrintServer" */
+  }
+
+  .nav-item svg {
+    width: 24px;
+    height: 24px;
   }
   
   .main-content {
     margin-left: 0;
-    padding-bottom: 80px;
+    padding-bottom: 24px;
   }
   
   .header {
-    height: 56px;
-    padding: 0 12px;
+    height: 64px;
+    padding: 0 16px;
   }
   
   .header-right {

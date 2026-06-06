@@ -67,6 +67,12 @@ async function buildServer() {
         decorateReply: false
     });
 
+    await fastify.register(staticFiles, {
+        root: path.join(__dirname, '../public/drivers'),
+        prefix: '/drivers/',
+        decorateReply: false
+    });
+
     await setupDatabase(fastify);
     await setupRedis(fastify);
     await setupBullMQ(fastify);

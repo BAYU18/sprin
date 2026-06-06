@@ -368,6 +368,17 @@ export class IPPServer {
                     completed_at: new Date()
                 });
 
+            if (!result.success) {
+                await knex('alerts')
+                    .insert({
+                        printer_id: job.printer_id,
+                        type: 'job_failed',
+                        severity: 'error',
+                        title: 'Print Job Failed',
+                        message: `Print job "${job.job_name || job.file_name}" failed on printer. Error: ${result.error || 'Unknown printer error'}`
+                    });
+            }
+
             if (result.success) {
                 return this.buildResponse(req.requestId, STATUS.OK, (encoder) => {
                     encoder.addAttr('job-attributes-tag', SYNTAX.INTEGER, 'job-id', job.id);
@@ -381,6 +392,16 @@ export class IPPServer {
             await knex('print_jobs')
                 .where({ id: job.id })
                 .update({ status: 'failed', error_message: (err as Error).message, completed_at: new Date() });
+            
+            await knex('alerts')
+                .insert({
+                    printer_id: job.printer_id,
+                    type: 'job_failed',
+                    severity: 'error',
+                    title: 'Agent Print Error',
+                    message: `Failed to forward job "${job.job_name || job.file_name}" to agent. Error: ${(err as Error).message}`
+                });
+
             logger.error(`[IPP] Agent forward failed: ${(err as Error).message}`);
             return this.simpleResponse(req.requestId, STATUS.SERVER_ERROR_INTERNAL);
         }

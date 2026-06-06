@@ -6,7 +6,8 @@ const heartbeatSchema = z.object({
     printers: z.array(z.object({
         name: z.string(),
         status: z.string(),
-        jobs_in_queue: z.number().int().nonnegative().default(0)
+        jobs_in_queue: z.number().int().nonnegative().default(0),
+        telemetry: z.any().optional()
     })).default([]),
     stats: z.object({
         printers_online: z.number().int().nonnegative().default(0),
@@ -234,9 +235,37 @@ export async function setupNodesRoutes(fastify: FastifyInstance) {
                 .where('name', printer.name)
                 .where('client_id', id)
                 .update({
-                    status: printer.status === 'online' ? 'online' : 'offline',
-                    metadata: JSON.stringify({ jobs_in_queue: printer.jobs_in_queue })
+                    status: printer.status === 'online' ? 'online' : (printer.status === 'error' ? 'error' : 'offline'),
+                    metadata: JSON.stringify({ 
+                        jobs_in_queue: printer.jobs_in_queue,
+                        telemetry: printer.telemetry 
+                    })
                 });
+
+            // HARDWARE ERROR TELEMETRY ALERTS
+            if (printer.status === 'error' && printer.telemetry && printer.telemetry.hardwareError) {
+                const existingAlert = await fastify.knex('alerts')
+                    .where({ node_id: id, type: 'hardware_error', resolved: false })
+                    .andWhereRaw("metadata->>'printer_name' = ?", [printer.name])
+                    .first();
+                    
+                if (!existingAlert) {
+                    await fastify.knex('alerts').insert({
+                        type: 'hardware_error',
+                        severity: 'high',
+                        node_id: id,
+                        message: `Printer '${printer.name}' mendeteksi masalah perangkat keras: ${printer.telemetry.hardwareError}`,
+                        metadata: JSON.stringify({ 
+                            printer_name: printer.name, 
+                            error_code: printer.telemetry.errorStateCode,
+                            status_code: printer.telemetry.printerStatusCode,
+                            error_msg: printer.telemetry.hardwareError 
+                        }),
+                        resolved: false
+                    });
+                    logger.warn(`[HardwareTelemetry] Auto-Alert created for ${printer.name}: ${printer.telemetry.hardwareError}`);
+                }
+            }
         }
 
         fastify.io?.emit('node:heartbeat', {
