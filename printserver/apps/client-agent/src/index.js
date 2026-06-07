@@ -595,6 +595,44 @@ class APIClient {
     }
   }
 
+  /**
+   * Send heartbeat to central server's /api/node-internal/heartbeat endpoint
+   * This is the dedicated internal heartbeat endpoint for node management
+   * @param nodeName - Name of this node
+   * @param status - Node status (online/offline/error)
+   * @param printers - Array of printer info objects
+   * @param osInfo - OS info object with platform, release, hostname, arch, memory_gb, cpus
+   */
+  async heartbeatNodeInternal(nodeName, status = 'online', printers = [], osInfo = {}) {
+    try {
+      const payload = {
+        node_name: nodeName,
+        status,
+        printers,
+        os_info: osInfo
+      };
+
+      const response = await axios.post(
+        `${this.baseUrl}/api/node-internal/heartbeat`,
+        payload,
+        {
+          timeout: 5000,
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+
+      if (response.data?.success) {
+        logger.debug('Node-internal heartbeat sent successfully');
+      }
+      return response.data;
+    } catch (err) {
+      logger.warn('Node-internal heartbeat failed', { error: err.message });
+      return null;
+    }
+  }
+
   async uploadJob(job) {
     try {
       const form = new FormData();
@@ -925,7 +963,7 @@ class PrintServerAgent {
   }
 
   startHeartbeat() {
-    const interval = this.config.get('checkInterval') || 10000;
+    const interval = 30000; // 30 seconds - fixed interval for node-internal heartbeat
     const printerRefreshInterval = this.config.get('printerRefreshInterval') || 300000; // 5 minutes default
 
     const BUILTIN_PRINTERS = [
@@ -969,6 +1007,21 @@ class PrintServerAgent {
             jobs_in_queue: 0
           }));
 
+        // Build OS info for heartbeat
+        const totalMemGb = Math.round(os.totalmem() / (1024 * 1024 * 1024) * 10) / 10;
+        const osInfo = {
+          platform: os.platform(),
+          release: os.release(),
+          hostname: os.hostname(),
+          arch: os.arch(),
+          memory_gb: totalMemGb,
+          cpus: os.cpus().length
+        };
+
+        // Send heartbeat to /api/node-internal/heartbeat endpoint
+        await this.apiClient.heartbeatNodeInternal(os.hostname(), 'online', printerList, osInfo);
+
+        // Also send the old-style heartbeat to /api/clients/:id/heartbeat for backwards compatibility
         await this.apiClient.heartbeat(printerList);
       }
     }, interval);

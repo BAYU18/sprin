@@ -22,6 +22,16 @@ const clientSchema = z.object({
     message: "Either hostname or name is required"
 });
 
+const heartbeatSchema = z.object({
+    status: z.enum(['online', 'offline']).optional(),
+    printers: z.array(z.object({
+        name: z.string(),
+        status: z.string().optional(),
+        jobs_in_queue: z.number().int().nonnegative().optional()
+    })).optional(),
+    jobs: z.any().optional()
+});
+
 export async function setupClientsRoutes(fastify: FastifyInstance) {
     fastify.get('/', async (request, reply) => {
         const clients = await fastify.knex('clients')
@@ -116,7 +126,18 @@ export async function setupClientsRoutes(fastify: FastifyInstance) {
 
     fastify.post('/:id/heartbeat', async (request, reply) => {
         const { id } = request.params as { id: string };
-        const { status, printers, jobs } = request.body as any;
+
+        let body: z.infer<typeof heartbeatSchema>;
+        try {
+            body = heartbeatSchema.parse(request.body);
+        } catch (error) {
+            if (error instanceof z.ZodError) {
+                return reply.status(400).send({ error: 'Invalid heartbeat payload', details: error.errors });
+            }
+            throw error;
+        }
+
+        const { status, printers, jobs } = body;
 
         await fastify.knex('clients')
             .where({ id })

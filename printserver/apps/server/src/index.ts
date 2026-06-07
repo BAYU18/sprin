@@ -21,6 +21,7 @@ import { CentralPrintRouter } from './services/centralRouter.js';
 import { autoHealScheduler, startAutoClearOffline } from './services/autoheal.js';
 import { NodeHeartbeatService } from './services/node-heartbeat.js';
 import { IPPServer } from './services/ipp-server.js';
+import { MdnsAdvertiser } from './services/mdns-advertiser.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -119,6 +120,14 @@ async function buildServer() {
         fastify.decorate('centralRouter', centralRouter);
         logger.info('[Server] CentralPrintRouter initialized');
     }
+
+    // Start mDNS advertising after routers are initialized
+    const mdnsAdvertiser = new MdnsAdvertiser();
+    const publishers = await fastify.knex('printers')
+        .select('id', 'name', 'slug', 'name as displayName', 'capabilities');
+    mdnsAdvertiser.startAdvertising(publishers);
+    fastify.decorate('mdnsAdvertiser', mdnsAdvertiser);
+    logger.info('[Server] mDNS advertising started');
 
     await setupRoutes(fastify);
 

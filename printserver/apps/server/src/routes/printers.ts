@@ -38,7 +38,7 @@ export async function setupPrintersRoutes(fastify: FastifyInstance) {
         const cacheKey = cacheKeys.printersList('default');
 
         if (cacheable) {
-            const data = await cache.getOrSet(cacheKey, 10, async () => {
+            const data = await cache.getOrSet(cacheKey, 60, async () => {
                 return await fastify.knex('printers')
                     .leftJoin('printer_groups', 'printers.group_id', 'printer_groups.id')
                     .leftJoin('clients', 'printers.client_id', 'clients.id')
@@ -156,6 +156,9 @@ export async function setupPrintersRoutes(fastify: FastifyInstance) {
                 updated_at: new Date()
             });
 
+        // Invalidate printers list cache
+        await cache.invalidate(cacheKeys.printersList('default'));
+
         return { success: true, id: printerId };
     });
 
@@ -174,6 +177,9 @@ export async function setupPrintersRoutes(fastify: FastifyInstance) {
             .returning('*');
 
         fastify.io?.emit('printer:created', printer);
+
+        // Invalidate printers list cache
+        await cache.invalidate(cacheKeys.printersList('default'));
 
         return printer;
     });
@@ -197,6 +203,9 @@ export async function setupPrintersRoutes(fastify: FastifyInstance) {
 
         fastify.io?.emit('printer:updated', printer);
 
+        // Invalidate printers list cache
+        await cache.invalidate(cacheKeys.printersList('default'));
+
         return printer;
     });
 
@@ -212,6 +221,9 @@ export async function setupPrintersRoutes(fastify: FastifyInstance) {
         }
 
         fastify.io?.emit('printer:deleted', { id });
+
+        // Invalidate printers list cache
+        await cache.invalidate(cacheKeys.printersList('default'));
 
         return { success: true };
     });

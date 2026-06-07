@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { jobs as jobsApi } from '@/lib/api';
 import { on, off } from '@/hooks/useSocket';
 import {
@@ -99,7 +99,7 @@ export default function JobsPage() {
 
   // ── Data fetching ──────────────────────────────────────────────────────────
 
-  const fetchJobs = async () => {
+  const fetchJobs = useCallback(async () => {
     setLoading(true);
     try {
       const params: any = { page, limit: LIMIT };
@@ -114,11 +114,11 @@ export default function JobsPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [page, status, search]);
 
   useEffect(() => {
     fetchJobs();
-  }, [page, status]);
+  }, [fetchJobs]);
 
   // Socket real-time updates
   useEffect(() => {
@@ -136,7 +136,7 @@ export default function JobsPage() {
       off('job:held', handleJobUpdate);
       off('job:released', handleJobUpdate);
     };
-  }, [page, status]);
+  }, [fetchJobs]);
 
   // ── Actions ────────────────────────────────────────────────────────────────
 

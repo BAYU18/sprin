@@ -130,4 +130,12 @@ export const badges = {
   get: () => api.get('/api/badges'),
 };
 
+export const nodes = {
+  list: (params?: any) => api.get('/api/nodes', { params }),
+  get: (id: number) => api.get(`/api/nodes/${id}`),
+  register: (data: any) => api.post('/api/nodes/register', data),
+  heartbeat: (id: number, data: any) => api.post(`/api/nodes/${id}/heartbeat`, data),
+  delete: (id: number) => api.delete(`/api/nodes/${id}`),
+};
+
 export default api;

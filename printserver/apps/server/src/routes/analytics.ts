@@ -1,145 +1,169 @@
 import { FastifyInstance } from 'fastify';
+import { z } from 'zod';
+import { cache, cacheKeys } from '../utils/cache.js';
+
+const volumeQuerySchema = z.object({
+    days: z.coerce.number().int().min(1).max(365).default(7)
+});
+
+const topUsersQuerySchema = z.object({
+    limit: z.coerce.number().int().min(1).max(100).default(10)
+});
 
 export async function setupAnalyticsRoutes(fastify: FastifyInstance) {
     fastify.get('/overview', async (request, reply) => {
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
+        return await cache.getOrSet(cacheKeys.analytics('overview'), 300, async () => {
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
 
-        const [
-            totalPrinters,
-            onlinePrinters,
-            totalClients,
-            onlineClients,
-            todayJobs,
-            pendingJobs
-        ] = await Promise.all([
-            fastify.knex('printers').count('* as count').first(),
-            fastify.knex('printers').where('status', 'online').count('* as count').first(),
-            fastify.knex('clients').count('* as count').first(),
-            fastify.knex('clients').where('is_online', true).count('* as count').first(),
-            fastify.knex('print_jobs').where('created_at', '>=', today).count('* as count').first(),
-            fastify.knex('queues').where('status', 'waiting').count('* as count').first()
-        ]);
+            const [
+                totalPrinters,
+                onlinePrinters,
+                totalClients,
+                onlineClients,
+                todayJobs,
+                pendingJobs
+            ] = await Promise.all([
+                fastify.knex('printers').count('* as count').first(),
+                fastify.knex('printers').where('status', 'online').count('* as count').first(),
+                fastify.knex('clients').count('* as count').first(),
+                fastify.knex('clients').where('is_online', true).count('* as count').first(),
+                fastify.knex('print_jobs').where('created_at', '>=', today).count('* as count').first(),
+                fastify.knex('queues').where('status', 'waiting').count('* as count').first()
+            ]);
 
-        return {
-            printers: {
-                total: totalPrinters?.count || 0,
-                online: onlinePrinters?.count || 0
-            },
-            clients: {
-                total: totalClients?.count || 0,
-                online: onlineClients?.count || 0
-            },
-            jobs: {
-                today: todayJobs?.count || 0,
-                pending: pendingJobs?.count || 0
-            }
-        };
+            return {
+                printers: {
+                    total: totalPrinters?.count || 0,
+                    online: onlinePrinters?.count || 0
+                },
+                clients: {
+                    total: totalClients?.count || 0,
+                    online: onlineClients?.count || 0
+                },
+                jobs: {
+                    today: todayJobs?.count || 0,
+                    pending: pendingJobs?.count || 0
+                }
+            };
+        });
     });
 
     fastify.get('/volume', async (request, reply) => {
-        const { days = 7 } = request.query as { days?: number };
+        const { days } = volumeQuerySchema.parse(request.query);
 
-        const startDate = new Date();
-        startDate.setDate(startDate.getDate() - days);
+        return await cache.getOrSet(cacheKeys.analytics(`volume:${days}`), 300, async () => {
+            const startDate = new Date();
+            startDate.setDate(startDate.getDate() - days);
 
-        const volumeData = await fastify.knex('print_jobs')
-            .where('created_at', '>=', startDate)
-            .select(
-                fastify.knex.raw('DATE(created_at) as date'),
-                fastify.knex.raw('COUNT(*) as jobs'),
-                fastify.knex.raw('SUM(pages * copies) as pages')
-            )
-            .groupBy(fastify.knex.raw('DATE(created_at)'))
-            .orderBy('date', 'asc');
+            const volumeData = await fastify.knex('print_jobs')
+                .where('created_at', '>=', startDate)
+                .select(
+                    fastify.knex.raw('DATE(created_at) as date'),
+                    fastify.knex.raw('COUNT(*) as jobs'),
+                    fastify.knex.raw('SUM(pages * copies) as pages')
+                )
+                .groupBy(fastify.knex.raw('DATE(created_at)'))
+                .orderBy('date', 'asc');
 
-        return volumeData;
+            return volumeData;
+        });
     });
 
     fastify.get('/printers/usage', async (request, reply) => {
-        const topPrinters = await fastify.knex('print_jobs')
-            .join('printers', 'print_jobs.printer_id', 'printers.id')
-            .where('print_jobs.created_at', '>=', new Date(Date.now() - 30 * 24 * 60 * 60 * 1000))
-            .select(
-                'printers.id',
-                'printers.name',
-                fastify.knex.raw('COUNT(*) as jobs'),
-                fastify.knex.raw('SUM(print_jobs.pages * print_jobs.copies) as pages')
-            )
-            .groupBy('printers.id', 'printers.name')
-            .orderBy('pages', 'desc')
-            .limit(10);
+        return await cache.getOrSet(cacheKeys.analytics('printers-usage'), 300, async () => {
+            const topPrinters = await fastify.knex('print_jobs')
+                .join('printers', 'print_jobs.printer_id', 'printers.id')
+                .where('print_jobs.created_at', '>=', new Date(Date.now() - 30 * 24 * 60 * 60 * 1000))
+                .select(
+                    'printers.id',
+                    'printers.name',
+                    fastify.knex.raw('COUNT(*) as jobs'),
+                    fastify.knex.raw('SUM(print_jobs.pages * print_jobs.copies) as pages')
+                )
+                .groupBy('printers.id', 'printers.name')
+                .orderBy('pages', 'desc')
+                .limit(10);
 
-        return topPrinters;
+            return topPrinters;
+        });
     });
 
     fastify.get('/users/top', async (request, reply) => {
-        const { limit = 10 } = request.query as { limit?: number };
+        const { limit } = topUsersQuerySchema.parse(request.query);
 
-        const topUsers = await fastify.knex('print_jobs')
-            .join('users', 'print_jobs.user_id', 'users.id')
-            .where('print_jobs.created_at', '>=', new Date(Date.now() - 30 * 24 * 60 * 60 * 1000))
-            .select(
-                'users.id',
-                'users.username',
-                'users.full_name',
-                'users.department',
-                fastify.knex.raw('COUNT(*) as jobs'),
-                fastify.knex.raw('SUM(print_jobs.pages * print_jobs.copies) as pages')
-            )
-            .groupBy('users.id', 'users.username', 'users.full_name', 'users.department')
-            .orderBy('pages', 'desc')
-            .limit(limit);
+        return await cache.getOrSet(cacheKeys.analytics(`users-top:${limit}`), 300, async () => {
+            const topUsers = await fastify.knex('print_jobs')
+                .join('users', 'print_jobs.user_id', 'users.id')
+                .where('print_jobs.created_at', '>=', new Date(Date.now() - 30 * 24 * 60 * 60 * 1000))
+                .select(
+                    'users.id',
+                    'users.username',
+                    'users.full_name',
+                    'users.department',
+                    fastify.knex.raw('COUNT(*) as jobs'),
+                    fastify.knex.raw('SUM(print_jobs.pages * print_jobs.copies) as pages')
+                )
+                .groupBy('users.id', 'users.username', 'users.full_name', 'users.department')
+                .orderBy('pages', 'desc')
+                .limit(limit);
 
-        return topUsers;
+            return topUsers;
+        });
     });
 
     fastify.get('/failures', async (request, reply) => {
-        const failures = await fastify.knex('print_jobs')
-            .where('status', 'failed')
-            .where('created_at', '>=', new Date(Date.now() - 7 * 24 * 60 * 60 * 1000))
-            .select(
-                fastify.knex.raw('error_message'),
-                fastify.knex.raw('COUNT(*) as count')
-            )
-            .groupBy('error_message')
-            .orderBy('count', 'desc')
-            .limit(10);
+        return await cache.getOrSet(cacheKeys.analytics('failures'), 300, async () => {
+            const failures = await fastify.knex('print_jobs')
+                .where('status', 'failed')
+                .where('created_at', '>=', new Date(Date.now() - 7 * 24 * 60 * 60 * 1000))
+                .select(
+                    fastify.knex.raw('error_message'),
+                    fastify.knex.raw('COUNT(*) as count')
+                )
+                .groupBy('error_message')
+                .orderBy('count', 'desc')
+                .limit(10);
 
-        return failures;
+            return failures;
+        });
     });
 
     fastify.get('/departments', async (request, reply) => {
-        const deptStats = await fastify.knex('print_jobs')
-            .join('users', 'print_jobs.user_id', 'users.id')
-            .whereNotNull('users.department')
-            .where('print_jobs.created_at', '>=', new Date(Date.now() - 30 * 24 * 60 * 60 * 1000))
-            .select(
-                'users.department',
-                fastify.knex.raw('COUNT(*) as jobs'),
-                fastify.knex.raw('SUM(print_jobs.pages * print_jobs.copies) as pages')
-            )
-            .groupBy('users.department')
-            .orderBy('pages', 'desc');
+        return await cache.getOrSet(cacheKeys.analytics('departments'), 300, async () => {
+            const deptStats = await fastify.knex('print_jobs')
+                .join('users', 'print_jobs.user_id', 'users.id')
+                .whereNotNull('users.department')
+                .where('print_jobs.created_at', '>=', new Date(Date.now() - 30 * 24 * 60 * 60 * 1000))
+                .select(
+                    'users.department',
+                    fastify.knex.raw('COUNT(*) as jobs'),
+                    fastify.knex.raw('SUM(print_jobs.pages * print_jobs.copies) as pages')
+                )
+                .groupBy('users.department')
+                .orderBy('pages', 'desc');
 
-        return deptStats;
+            return deptStats;
+        });
     });
 
     fastify.get('/paper/usage', async (request, reply) => {
-        try {
-            const paperUsage = await fastify.knex('print_jobs')
-                .select(
-                    fastify.knex.raw('COALESCE(paper_size, \'Unknown\') as paper_size'),
-                    fastify.knex.raw('COUNT(id) as job_count'),
-                    fastify.knex.raw('COALESCE(SUM(pages), 0) as total_pages')
-                )
-                .groupByRaw('COALESCE(paper_size, \'Unknown\')')
-                .orderBy('total_pages', 'desc');
+        return await cache.getOrSet(cacheKeys.analytics('paper-usage'), 300, async () => {
+            try {
+                const paperUsage = await fastify.knex('print_jobs')
+                    .select(
+                        fastify.knex.raw('COALESCE(paper_size, \'Unknown\') as paper_size'),
+                        fastify.knex.raw('COUNT(id) as job_count'),
+                        fastify.knex.raw('COALESCE(SUM(pages), 0) as total_pages')
+                    )
+                    .groupByRaw('COALESCE(paper_size, \'Unknown\')')
+                    .orderBy('total_pages', 'desc');
 
-            return paperUsage;
-        } catch (error) {
-            request.log.error('Failed to fetch paper usage analytics:', error);
-            return reply.status(500).send({ error: 'Internal Server Error' });
-        }
+                return paperUsage;
+            } catch (error) {
+                request.log.error('Failed to fetch paper usage analytics:', error);
+                return reply.status(500).send({ error: 'Internal Server Error' });
+            }
+        });
     });
 }

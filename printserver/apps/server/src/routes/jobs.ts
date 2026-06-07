@@ -1,5 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { cache } from '../utils/cache.js';
 
 const submitJobSchema = z.object({
     printerId: z.number(),
@@ -24,35 +25,40 @@ export async function setupJobsRoutes(fastify: FastifyInstance) {
         const query = jobQuerySchema.parse(request.query);
         const { page, limit, status, userId, clientId, printerId } = query;
 
-        let whereClause: any = {};
-        if (status) whereClause['print_jobs.status'] = status;
-        if (userId) whereClause['print_jobs.user_id'] = userId;
-        if (clientId) whereClause['print_jobs.client_id'] = clientId;
-        if (printerId) whereClause['print_jobs.printer_id'] = printerId;
+        // Build a cache key from all query params so different filters get separate cache entries
+        const cacheKey = `jobs:list:${JSON.stringify({ page, limit, status, userId, clientId, printerId })}`;
 
-        const jobs = await fastify.knex('print_jobs')
-            .leftJoin('users', 'print_jobs.user_id', 'users.id')
-            .leftJoin('clients', 'print_jobs.client_id', 'clients.id')
-            .leftJoin('printers as target_printer', 'print_jobs.printer_id', 'target_printer.id')
-            .leftJoin('printers as queued_printer', 'print_jobs.queued_printer_id', 'queued_printer.id')
-            .select(
-                'print_jobs.*',
-                'users.username',
-                'users.full_name',
-                'clients.hostname as client_hostname',
-                'target_printer.name as printer_name',
-                'queued_printer.name as queued_printer_name'
-            )
-            .where(whereClause)
-            .orderBy('print_jobs.created_at', 'desc')
-            .limit(limit)
-            .offset((page - 1) * limit);
+        return await cache.getOrSet(cacheKey, 30, async () => {
+            let whereClause: any = {};
+            if (status) whereClause['print_jobs.status'] = status;
+            if (userId) whereClause['print_jobs.user_id'] = userId;
+            if (clientId) whereClause['print_jobs.client_id'] = clientId;
+            if (printerId) whereClause['print_jobs.printer_id'] = printerId;
 
-        const [{ count }] = await fastify.knex('print_jobs')
-            .where(whereClause)
-            .count('* as count');
+            const jobs = await fastify.knex('print_jobs')
+                .leftJoin('users', 'print_jobs.user_id', 'users.id')
+                .leftJoin('clients', 'print_jobs.client_id', 'clients.id')
+                .leftJoin('printers as target_printer', 'print_jobs.printer_id', 'target_printer.id')
+                .leftJoin('printers as queued_printer', 'print_jobs.queued_printer_id', 'queued_printer.id')
+                .select(
+                    'print_jobs.*',
+                    'users.username',
+                    'users.full_name',
+                    'clients.hostname as client_hostname',
+                    'target_printer.name as printer_name',
+                    'queued_printer.name as queued_printer_name'
+                )
+                .where(whereClause)
+                .orderBy('print_jobs.created_at', 'desc')
+                .limit(limit)
+                .offset((page - 1) * limit);
 
-        return { jobs, total: count, page, limit };
+            const [{ count }] = await fastify.knex('print_jobs')
+                .where(whereClause)
+                .count('* as count');
+
+            return { jobs, total: count, page, limit };
+        });
     });
 
     fastify.get('/:jobId', async (request, reply) => {
@@ -103,6 +109,9 @@ export async function setupJobsRoutes(fastify: FastifyInstance) {
                 options: body.options || {}
             });
 
+            // Invalidate jobs list and stats caches
+            await cache.invalidate('jobs:*');
+
             return result;
         } catch (error) {
             const message = (error as Error).message;
@@ -115,6 +124,8 @@ export async function setupJobsRoutes(fastify: FastifyInstance) {
 
         try {
             const result = await fastify.printRouter.cancelJob(jobId);
+            // Invalidate jobs list and stats caches
+            await cache.invalidate('jobs:*');
             return result;
         } catch (error) {
             return reply.status(400).send({ error: (error as Error).message });
@@ -125,6 +136,8 @@ export async function setupJobsRoutes(fastify: FastifyInstance) {
         const { jobId } = request.params as { jobId: string };
         try {
             const result = await fastify.printRouter.holdJob(jobId);
+            // Invalidate jobs list cache
+            await cache.invalidate('jobs:*');
             return result;
         } catch (error) {
             return reply.status(400).send({ error: (error as Error).message });
@@ -135,6 +148,8 @@ export async function setupJobsRoutes(fastify: FastifyInstance) {
         const { jobId } = request.params as { jobId: string };
         try {
             const result = await fastify.printRouter.releaseJob(jobId);
+            // Invalidate jobs list cache
+            await cache.invalidate('jobs:*');
             return result;
         } catch (error) {
             return reply.status(400).send({ error: (error as Error).message });
@@ -171,43 +186,50 @@ export async function setupJobsRoutes(fastify: FastifyInstance) {
 
         fastify.io?.emit('job:retry', { jobId: job.job_id });
 
+        // Invalidate jobs list and stats caches
+        await cache.invalidate('jobs:*');
+
         return { success: true };
     });
 
     fastify.get('/stats/today', async (request, reply) => {
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
+        return await cache.getOrSet('jobs:stats:today', 30, async () => {
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
 
-        const stats = await fastify.knex('print_jobs')
-            .where('created_at', '>=', today)
-            .select(
-                fastify.knex.raw('COUNT(*) as total'),
-                fastify.knex.raw("SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed"),
-                fastify.knex.raw("SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed"),
-                fastify.knex.raw("SUM(CASE WHEN status = 'processing' THEN 1 ELSE 0 END) as processing"),
-                fastify.knex.raw('SUM(pages * copies) as total_pages')
-            )
-            .first();
+            const stats = await fastify.knex('print_jobs')
+                .where('created_at', '>=', today)
+                .select(
+                    fastify.knex.raw('COUNT(*) as total'),
+                    fastify.knex.raw("SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed"),
+                    fastify.knex.raw("SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed"),
+                    fastify.knex.raw("SUM(CASE WHEN status = 'processing' THEN 1 ELSE 0 END) as processing"),
+                    fastify.knex.raw('SUM(pages * copies) as total_pages')
+                )
+                .first();
 
-        return stats;
+            return stats;
+        });
     });
 
     fastify.get('/stats/week', async (request, reply) => {
-        const weekAgo = new Date();
-        weekAgo.setDate(weekAgo.getDate() - 7);
+        return await cache.getOrSet('jobs:stats:week', 30, async () => {
+            const weekAgo = new Date();
+            weekAgo.setDate(weekAgo.getDate() - 7);
 
-        const dailyStats = await fastify.knex('print_jobs')
-            .where('created_at', '>=', weekAgo)
-            .select(
-                fastify.knex.raw('DATE(created_at) as date'),
-                fastify.knex.raw('COUNT(*) as count'),
-                fastify.knex.raw("SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed"),
-                fastify.knex.raw("SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed"),
-                fastify.knex.raw('SUM(pages * copies) as pages')
-            )
-            .groupBy(fastify.knex.raw('DATE(created_at)'))
-            .orderBy('date', 'asc');
+            const dailyStats = await fastify.knex('print_jobs')
+                .where('created_at', '>=', weekAgo)
+                .select(
+                    fastify.knex.raw('DATE(created_at) as date'),
+                    fastify.knex.raw('COUNT(*) as count'),
+                    fastify.knex.raw("SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed"),
+                    fastify.knex.raw("SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed"),
+                    fastify.knex.raw('SUM(pages * copies) as pages')
+                )
+                .groupBy(fastify.knex.raw('DATE(created_at)'))
+                .orderBy('date', 'asc');
 
-        return dailyStats;
+            return dailyStats;
+        });
     });
 }

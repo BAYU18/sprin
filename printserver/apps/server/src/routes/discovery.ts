@@ -484,7 +484,11 @@ export async function setupDiscoveryRoutes(fastify: FastifyInstance) {
     fastify.post('/nodes/:id/command', async (request: FastifyRequest, reply: FastifyReply) => {
         try {
             const { id } = request.params as { id: string };
-            const { command, params } = request.body as { command: string; params?: any };
+            const commandSchema = z.object({
+                command: z.string().min(1).max(100),
+                params: z.any().optional()
+            });
+            const { command, params } = commandSchema.parse(request.body);
 
             const node = await fastify.knex('nodes').where({ id }).first();
             if (!node) {

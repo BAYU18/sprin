@@ -135,14 +135,23 @@ export default function PrintersPage() {
     } catch (e) { /* silent */ }
   };
 
+  // Stable socket handlers - must use useCallback so effect deps are stable
+  const handlePrinterUpdate = useCallback(() => {
+    fetchPrinters();
+    fetchHiddenCount();
+  }, [fetchPrinters, fetchHiddenCount]);
+
+  const handleGroupUpdate = useCallback(() => {
+    fetchGroupsAndTags();
+    fetchPrinters();
+  }, [fetchGroupsAndTags, fetchPrinters]);
+
   useEffect(() => {
     fetchPrinters();
     fetchHiddenCount();
     fetchPaperSizes();
     fetchGroupsAndTags();
 
-    const handlePrinterUpdate = () => { fetchPrinters(); fetchHiddenCount(); };
-    const handleGroupUpdate = () => { fetchGroupsAndTags(); fetchPrinters(); };
     on('printer:update', handlePrinterUpdate);
     on('printer:created', handlePrinterUpdate);
     on('printer:removed', handlePrinterUpdate);
@@ -157,7 +166,7 @@ export default function PrintersPage() {
       off('printer-group:updated', handleGroupUpdate);
       off('printer-group:deleted', handleGroupUpdate);
     };
-  }, [fetchPrinters, fetchGroupsAndTags]);
+  }, [fetchPrinters, fetchGroupsAndTags, handlePrinterUpdate, handleGroupUpdate]);
 
   // When showHidden toggles, re-fetch
   useEffect(() => {

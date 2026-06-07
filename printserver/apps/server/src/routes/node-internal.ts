@@ -329,6 +329,90 @@ export async function setupNodeInternalRoutes(fastify: FastifyInstance) {
             return reply.status(500).send({ error: (error as Error).message });
         }
     });
+
+    /**
+     * POST /internal/heartbeat
+     * Receive periodic heartbeat from Windows node agent
+     * Payload: { node_name, status, printers: [...], os_info: {...} }
+     */
+    fastify.post('/internal/heartbeat', async (request: FastifyRequest, reply: FastifyReply) => {
+        try {
+            const nodeSecret = request.headers['x-node-secret'];
+            if (nodeSecret !== process.env.NODE_SECRET) {
+                return reply.status(401).send({ error: 'Unauthorized' });
+            }
+
+            const body = request.body as {
+                node_name?: string;
+                status?: string;
+                printers?: Array<{
+                    name: string;
+                    status?: string;
+                    port?: string;
+                    type?: string;
+                    jobs_in_queue?: number;
+                }>;
+                os_info?: {
+                    platform?: string;
+                    release?: string;
+                    hostname?: string;
+                    arch?: string;
+                    memory_gb?: number;
+                    cpus?: number;
+                };
+            };
+
+            const nodeName = body.node_name || os.hostname();
+            const status = body.status || 'online';
+            const printers = body.printers || [];
+            const osInfo = body.os_info || {};
+
+            logger.info(`[NodeAPI] Heartbeat from node: ${nodeName}, status: ${status}, printers: ${printers.length}`);
+
+            // Update node last_seen in database
+            const existingNode = await fastify.knex('windows_nodes')
+                .where('hostname', nodeName)
+                .first();
+
+            if (existingNode) {
+                await fastify.knex('windows_nodes')
+                    .where({ id: existingNode.id })
+                    .update({
+                        last_heartbeat: new Date(),
+                        is_online: status === 'online',
+                        metadata: JSON.stringify({ printers, os_info: osInfo })
+                    });
+            }
+
+            // Record heartbeat in history table
+            await fastify.knex('node_heartbeats').insert({
+                node_id: existingNode?.id || null,
+                node_name: nodeName,
+                status,
+                printers_json: JSON.stringify(printers),
+                os_info_json: JSON.stringify(osInfo),
+                recorded_at: new Date()
+            });
+
+            // Emit Socket.IO event for real-time updates
+            fastify.io?.emit('node:heartbeat', {
+                node_name: nodeName,
+                status,
+                printers,
+                os_info: osInfo,
+                timestamp: new Date().toISOString()
+            });
+
+            return {
+                success: true,
+                node_name: nodeName,
+                received_at: new Date().toISOString()
+            };
+        } catch (error) {
+            logger.error('[NodeAPI] Heartbeat failed:', error);
+            return reply.status(500).send({ error: (error as Error).message });
+        }
+    });
 }
 
 export default setupNodeInternalRoutes;
