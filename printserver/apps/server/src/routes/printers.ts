@@ -2,6 +2,7 @@ import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { generatePrinterSlug, ensureUniquePrinterSlug } from '../utils/printer-slug.js';
 import { resolvePaperForPrinter, listPaperSizes } from '../services/paper-service.js';
+import { cache, cacheKeys } from '../utils/cache.js';
 
 const paperConfigSchema = z.object({
     size: z.string().min(1),
@@ -30,7 +31,34 @@ export async function setupPrintersRoutes(fastify: FastifyInstance) {
         // Filter out soft-removed printers by default (auto-removed after
         // 15 min offline). Admin can opt-in with ?include_removed=1 to see
         // the full list including hidden ones (e.g. for cleanup UI).
-        const { include_removed } = request.query as any;
+        const { include_removed, group, tag, status: statusFilter } = request.query as any;
+        // TIER-2 #1: cache only the default (no-filter) call. Filtered calls
+        // are rare and dynamic — caching them is a footgun.
+        const cacheable = !include_removed && !group && !tag && !statusFilter;
+        const cacheKey = cacheKeys.printersList('default');
+
+        if (cacheable) {
+            const data = await cache.getOrSet(cacheKey, 10, async () => {
+                return await fastify.knex('printers')
+                    .leftJoin('printer_groups', 'printers.group_id', 'printer_groups.id')
+                    .leftJoin('clients', 'printers.client_id', 'clients.id')
+                    .leftJoin('printer_drivers', 'printers.driver_id', 'printer_drivers.id')
+                    .select(
+                        'printers.*',
+                        'printer_groups.name as group_name',
+                        'clients.hostname as client_hostname',
+                        'clients.ip_address as client_ip',
+                        'printer_drivers.name as driver_name',
+                        'printer_drivers.manufacturer as driver_manufacturer',
+                        'printer_drivers.is_builtin as driver_is_builtin'
+                    )
+                    .whereRaw("(printers.config->>'auto_removed') IS DISTINCT FROM 'true'")
+                    .orderBy('printers.name', 'asc');
+            });
+            return data;
+        }
+
+        // Filtered path — no cache
         let q = fastify.knex('printers')
             .leftJoin('printer_groups', 'printers.group_id', 'printer_groups.id')
             .leftJoin('clients', 'printers.client_id', 'clients.id')
@@ -47,7 +75,24 @@ export async function setupPrintersRoutes(fastify: FastifyInstance) {
         if (!include_removed || include_removed === '0' || include_removed === 'false') {
             q = q.whereRaw("(printers.config->>'auto_removed') IS DISTINCT FROM 'true'");
         }
-        const printers = await q;
+        // TIER-1 #3: Filter by group name or group ID
+        if (group) {
+            const isNumeric = /^\d+$/.test(group);
+            if (isNumeric) {
+                q = q.where('printers.group_id', parseInt(group));
+            } else {
+                q = q.where('printer_groups.name', group);
+            }
+        }
+        // TIER-1 #3: Filter by tag (uses GIN index)
+        if (tag) {
+            q = q.whereRaw('? = ANY(printers.tags)', [String(tag).toLowerCase()]);
+        }
+        // Optional status filter (online/offline)
+        if (statusFilter) {
+            q = q.where('printers.status', statusFilter);
+        }
+        const printers = await q.orderBy('printers.name', 'asc');
         return printers;
     });
 

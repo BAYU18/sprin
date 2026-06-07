@@ -6,7 +6,7 @@ import { on, off } from '@/hooks/useSocket';
 import {
   Printer, Plus, RefreshCw, CheckCircle, XCircle,
   AlertTriangle, MoreVertical, Trash2, Edit, FileText, Eye, EyeOff, ChevronDown,
-  Play, Ban
+  Play, Ban, Filter, Tag, Folder, Search, X
 } from 'lucide-react';
 import Link from 'next/link';
 import AddPrinterModal from '@/components/AddPrinterModal';
@@ -16,6 +16,14 @@ interface PaperSize {
   widthMm: number;
   heightMm: number;
   builtin: boolean;
+}
+
+interface PrinterGroup {
+  id: number;
+  name: string;
+  description?: string;
+  settings?: any;
+  printer_count?: string;
 }
 
 export default function PrintersPage() {
@@ -31,6 +39,13 @@ export default function PrintersPage() {
   // Track saving state per printer
   const [savingPaper, setSavingPaper] = useState<number | null>(null);
   const [actionLoading, setActionLoading] = useState<Record<string, boolean>>({});
+  // TIER-1 #3: Group & tag filter state
+  const [groups, setGroups] = useState<PrinterGroup[]>([]);
+  const [availableTags, setAvailableTags] = useState<string[]>([]);
+  const [filterGroup, setFilterGroup] = useState<string>('');  // '' = all
+  const [filterTag, setFilterTag] = useState<string>('');
+  const [filterSearch, setFilterSearch] = useState<string>('');
+  const [showGroupModal, setShowGroupModal] = useState(false);
 
   const handleTestPrint = async (printerId: number) => {
     setActionLoading(prev => ({ ...prev, [`test-${printerId}`]: true }));
@@ -60,18 +75,47 @@ export default function PrintersPage() {
 
   const fetchPrinters = useCallback(async () => {
     try {
-      const url = showHidden ? '/api/printers?include_removed=1' : '/api/printers';
+      // TIER-1 #3: build query from group/tag/showHidden filters
+      const params = new URLSearchParams();
+      if (showHidden) params.set('include_removed', '1');
+      if (filterGroup) params.set('group', filterGroup);
+      if (filterTag) params.set('tag', filterTag);
+      const qs = params.toString();
+      const url = '/api/printers' + (qs ? `?${qs}` : '');
       const resp = await fetch(url, { credentials: 'include' });
       if (resp.ok) {
         const data = await resp.json();
-        setPrinters(data);
+        let list = Array.isArray(data) ? data : [];
+        // TIER-1 #3: client-side name search across group/name/slug
+        if (filterSearch.trim()) {
+          const q = filterSearch.toLowerCase();
+          list = list.filter((p: any) =>
+            (p.name || '').toLowerCase().includes(q) ||
+            (p.slug || '').toLowerCase().includes(q) ||
+            (p.group_name || '').toLowerCase().includes(q)
+          );
+        }
+        setPrinters(list);
       }
     } catch (error) {
       console.error('Failed to fetch printers:', error);
     } finally {
       setLoading(false);
     }
-  }, [showHidden]);
+  }, [showHidden, filterGroup, filterTag, filterSearch]);
+
+  const fetchGroupsAndTags = useCallback(async () => {
+    try {
+      const [g, t] = await Promise.all([
+        fetch('/api/printer-groups', { credentials: 'include' }).then(r => r.ok ? r.json() : []),
+        fetch('/api/printer-groups/tags/all', { credentials: 'include' }).then(r => r.ok ? r.json() : [])
+      ]);
+      if (Array.isArray(g)) setGroups(g);
+      if (Array.isArray(t)) setAvailableTags(t);
+    } catch (e) {
+      console.error('Failed to fetch groups/tags', e);
+    }
+  }, []);
 
   const fetchHiddenCount = async () => {
     try {
@@ -95,16 +139,25 @@ export default function PrintersPage() {
     fetchPrinters();
     fetchHiddenCount();
     fetchPaperSizes();
+    fetchGroupsAndTags();
 
     const handlePrinterUpdate = () => { fetchPrinters(); fetchHiddenCount(); };
+    const handleGroupUpdate = () => { fetchGroupsAndTags(); fetchPrinters(); };
     on('printer:update', handlePrinterUpdate);
     on('printer:created', handlePrinterUpdate);
-
+    on('printer:removed', handlePrinterUpdate);
+    on('printer-group:created', handleGroupUpdate);
+    on('printer-group:updated', handleGroupUpdate);
+    on('printer-group:deleted', handleGroupUpdate);
     return () => {
       off('printer:update', handlePrinterUpdate);
       off('printer:created', handlePrinterUpdate);
+      off('printer:removed', handlePrinterUpdate);
+      off('printer-group:created', handleGroupUpdate);
+      off('printer-group:updated', handleGroupUpdate);
+      off('printer-group:deleted', handleGroupUpdate);
     };
-  }, [fetchPrinters]);
+  }, [fetchPrinters, fetchGroupsAndTags]);
 
   // When showHidden toggles, re-fetch
   useEffect(() => {
@@ -298,6 +351,121 @@ export default function PrintersPage() {
             <Plus style={{ width: '16px', height: '16px' }} />
             Add Printer
           </button>
+        </div>
+      </div>
+
+      {/* TIER-1 #3: Filter Bar — search, group, tag */}
+      <div style={{
+        display: 'flex',
+        flexWrap: 'wrap',
+        alignItems: 'center',
+        gap: '12px',
+        padding: '14px 16px',
+        background: 'rgba(13, 17, 23, 0.6)',
+        border: '1px solid var(--border)',
+        borderRadius: '10px',
+        marginBottom: '8px'
+      }}>
+        {/* Search */}
+        <div style={{ position: 'relative', minWidth: '220px' }}>
+          <Search style={{
+            position: 'absolute', left: '10px', top: '50%',
+            transform: 'translateY(-50%)',
+            width: '14px', height: '14px',
+            color: 'var(--text-muted)'
+          }} />
+          <input
+            type="text"
+            value={filterSearch}
+            onChange={(e) => setFilterSearch(e.target.value)}
+            placeholder="Search printers..."
+            style={{
+              width: '100%',
+              padding: '8px 12px 8px 32px',
+              background: 'rgba(0, 0, 0, 0.3)',
+              border: '1px solid var(--border)',
+              borderRadius: '6px',
+              color: 'var(--text-primary)',
+              fontSize: '13px',
+              outline: 'none'
+            }}
+          />
+        </div>
+
+        {/* Group filter */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <Folder style={{ width: '14px', height: '14px', color: 'var(--accent-cyan)' }} />
+          <select
+            value={filterGroup}
+            onChange={(e) => setFilterGroup(e.target.value)}
+            style={{
+              padding: '8px 12px',
+              background: 'rgba(0, 0, 0, 0.3)',
+              border: '1px solid var(--border)',
+              borderRadius: '6px',
+              color: 'var(--text-primary)',
+              fontSize: '13px',
+              cursor: 'pointer',
+              minWidth: '160px'
+            }}
+          >
+            <option value="">All Groups ({groups.reduce((sum, g) => sum + parseInt(String(g.printer_count || 0)), 0)})</option>
+            {groups.map(g => (
+              <option key={g.id} value={g.id}>
+                {g.name} ({g.printer_count || 0})
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {/* Tag filter */}
+        {availableTags.length > 0 && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+            <Tag style={{ width: '14px', height: '14px', color: 'var(--accent-cyan)' }} />
+            <select
+              value={filterTag}
+              onChange={(e) => setFilterTag(e.target.value)}
+              style={{
+                padding: '8px 12px',
+                background: 'rgba(0, 0, 0, 0.3)',
+                border: '1px solid var(--border)',
+                borderRadius: '6px',
+                color: 'var(--text-primary)',
+                fontSize: '13px',
+                cursor: 'pointer',
+                minWidth: '120px'
+              }}
+            >
+              <option value="">All Tags</option>
+              {availableTags.map(t => (
+                <option key={t} value={t}>#{t}</option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {/* Clear filters */}
+        {(filterGroup || filterTag || filterSearch) && (
+          <button
+            onClick={() => { setFilterGroup(''); setFilterTag(''); setFilterSearch(''); }}
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: '4px',
+              padding: '6px 12px', fontSize: '12px',
+              background: 'rgba(255, 100, 100, 0.1)',
+              border: '1px solid rgba(255, 100, 100, 0.3)',
+              borderRadius: '6px',
+              color: '#ff6b6b',
+              cursor: 'pointer'
+            }}
+          >
+            <X style={{ width: '12px', height: '12px' }} />
+            Clear
+          </button>
+        )}
+
+        {/* Result count */}
+        <div style={{ marginLeft: 'auto', fontSize: '12px', color: 'var(--text-muted)' }}>
+          Showing <span style={{ color: 'var(--accent-cyan)', fontWeight: 600 }}>{printers.length}</span> printer{printers.length !== 1 ? 's' : ''}
         </div>
       </div>
 
@@ -561,6 +729,30 @@ export default function PrintersPage() {
                       {printer.group_name || 'None'}
                     </span>
                   </div>
+
+                  {/* TIER-1 #3: Tags chips */}
+                  {Array.isArray(printer.tags) && printer.tags.length > 0 && (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', paddingTop: '4px' }}>
+                      {printer.tags.map((tag: string) => (
+                        <span
+                          key={tag}
+                          style={{
+                            display: 'inline-block',
+                            padding: '2px 8px',
+                            fontSize: '10px',
+                            fontWeight: 600,
+                            color: 'var(--accent-cyan)',
+                            background: 'rgba(0, 212, 255, 0.1)',
+                            border: '1px solid rgba(0, 212, 255, 0.3)',
+                            borderRadius: '10px',
+                            fontFamily: 'Share Tech Mono, monospace'
+                          }}
+                        >
+                          #{tag}
+                        </span>
+                      ))}
+                    </div>
+                  )}
                   
                   {/* PAPER CONFIG SELECTOR */}
                   <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border)', paddingBottom: '8px', alignItems: 'center' }}>

@@ -101,6 +101,7 @@ export const analytics = {
   topUsers: (limit?: number) => api.get('/api/analytics/users/top', { params: { limit } }),
   failures: () => api.get('/api/analytics/failures'),
   departments: () => api.get('/api/analytics/departments'),
+  paperUsage: () => api.get('/api/analytics/paper/usage'),
 };
 
 export const settings = {

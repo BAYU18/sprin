@@ -339,6 +339,7 @@ export class IPPServer {
                 file_path: 'ipp-stream',
                 file_type: 'raw',
                 file_size: docData.length,
+                paper_size: paper?.size || 'Default', // SIMPAN UKURAN KERTAS
                 copies: copies,
                 status: 'processing',
                 priority: 'normal',

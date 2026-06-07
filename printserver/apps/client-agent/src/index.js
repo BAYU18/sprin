@@ -870,12 +870,37 @@ class PrintServerAgent {
 
   async registerWithServer() {
     try {
-      const addrs = Object.values(os.networkInterfaces()).flat().filter(i => i && !i.internal).map(i => i.address);
+      // Pick the best LAN IP — prefer private IPv4, then any IPv4, then IPv6.
+      // Skip link-local fe80::, virtual adapters, and internal NICs.
+      const allIfaces = Object.values(os.networkInterfaces()).flat().filter(i => i && !i.internal);
+      const isPrivateIPv4 = (a) => /^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)/.test(a);
+      const isLinkLocalIPv6 = (a) => /^fe80:/i.test(a);
+
+      const privateIPv4 = allIfaces.find(i => i.family === 'IPv4' && isPrivateIPv4(i.address));
+      const anyIPv4     = allIfaces.find(i => i.family === 'IPv4');
+      const globalIPv6  = allIfaces.find(i => i.family === 'IPv6' && !isLinkLocalIPv6(i.address));
+      const linkIPv6    = allIfaces.find(i => i.family === 'IPv6' && isLinkLocalIPv6(i.address));
+
+      const bestIface = privateIPv4 || anyIPv4 || globalIPv6 || linkIPv6 || null;
+
+      // Map Windows release number → friendly product name.
+      let osVersionLabel = `${os.platform()} ${os.release()}`;
+      if (os.platform() === 'win32') {
+        const r = os.release();
+        if (r.startsWith('11.')) osVersionLabel = `Windows 11 (${r})`;
+        else if (r.startsWith('10.')) osVersionLabel = `Windows 10 (${r})`;
+        else if (r.startsWith('6.3.')) osVersionLabel = `Windows 8.1 (${r})`;
+        else if (r.startsWith('6.2.')) osVersionLabel = `Windows 8 (${r})`;
+        else if (r.startsWith('6.1.')) osVersionLabel = `Windows 7 (${r})`;
+        else if (r.startsWith('6.0.')) osVersionLabel = `Windows Vista (${r})`;
+        else osVersionLabel = `Windows (${r})`;
+      }
+
       const nodeInfo = {
         hostname: os.hostname(),
-        ip_address: addrs[0] || null,
-        mac_address: null,
-        os_version: os.platform() + ' ' + os.release(),
+        ip_address: bestIface ? bestIface.address : null,
+        mac_address: bestIface ? bestIface.mac : null,
+        os_version: osVersionLabel,
         client_version: AGENT_VERSION
       };
 

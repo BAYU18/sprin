@@ -76,6 +76,104 @@ export async function setupSettingsRoutes(fastify: FastifyInstance) {
             .send(fileBuffer);
     });
 
+    // 4. Restore database + configs from a server-side backup file
+    //    WARNING: destructive — drops & recreates the printserver database.
+    fastify.post('/backup/restore', async (request: any, reply) => {
+        const { filename } = request.body || {};
+        if (!filename || typeof filename !== 'string') {
+            return reply.status(400).send({ error: 'filename is required' });
+        }
+
+        // Strict allowlist: must match the backup naming pattern exactly
+        const cleanFilename = path.basename(filename);
+        if (!/^printserver-backup-.*\.tar\.gz$/.test(cleanFilename)) {
+            return reply.status(400).send({ error: 'Invalid backup filename format' });
+        }
+
+        const backupDir = '/root/printserver-backups';
+        const filePath = path.join(backupDir, cleanFilename);
+
+        if (!fs.existsSync(filePath)) {
+            return reply.status(404).send({ error: 'Backup file not found on server' });
+        }
+
+        // Run the restore script and stream stdout/stderr back
+        return new Promise((resolve) => {
+            exec(
+                `/root/serverbot/print/printserver/scripts/restore.sh "${filePath}"`,
+                { maxBuffer: 10 * 1024 * 1024 },
+                (error, stdout, stderr) => {
+                    if (error) {
+                        console.error('Restore error:', error);
+                        return resolve(reply.status(500).send({
+                            error: 'Restore failed',
+                            details: stderr || error.message,
+                            log: stdout,
+                        }));
+                    }
+                    resolve({
+                        success: true,
+                        filename: cleanFilename,
+                        log: stdout,
+                    });
+                }
+            );
+        });
+    });
+
+    // 5. Upload a backup file from another VPS / local machine
+    //    Saves the .tar.gz to /root/printserver-backups/ with a timestamp suffix
+    //    so it appears in the list and can be restored via the existing flow.
+    fastify.post('/backup/upload', async (request: any, reply) => {
+        const backupDir = '/root/printserver-backups';
+        if (!fs.existsSync(backupDir)) {
+            fs.mkdirSync(backupDir, { recursive: true });
+        }
+
+        // Expect a single file field
+        const data = await (request as any).file().catch(() => null);
+        if (!data) {
+            return reply.status(400).send({ error: 'No file uploaded. Use multipart/form-data with field "file".' });
+        }
+
+        // Validate filename extension
+        const originalName = path.basename(data.filename || '');
+        if (!originalName.toLowerCase().endsWith('.tar.gz')) {
+            return reply.status(400).send({ error: 'File must have .tar.gz extension' });
+        }
+
+        // Collect the whole file in memory (backups are small — 13MB typical, 100MB hard cap)
+        const chunks: Buffer[] = [];
+        for await (const chunk of data.file) {
+            chunks.push(chunk as Buffer);
+        }
+        const buffer = Buffer.concat(chunks);
+
+        // Sanity check magic bytes (gzip: 0x1f 0x8b)
+        if (buffer.length < 2 || buffer[0] !== 0x1f || buffer[1] !== 0x8b) {
+            return reply.status(400).send({ error: 'File is not a valid gzip archive (bad magic bytes)' });
+        }
+
+        // Build a safe destination filename
+        const ts = new Date().toISOString().replace(/[:.]/g, '-');
+        const destName = `printserver-backup-UPLOADED-${ts}.tar.gz`;
+        const destPath = path.join(backupDir, destName);
+
+        try {
+            fs.writeFileSync(destPath, buffer);
+        } catch (err: any) {
+            return reply.status(500).send({ error: 'Failed to write backup file', details: err.message });
+        }
+
+        return {
+            success: true,
+            filename: destName,
+            size: buffer.length,
+            originalName,
+            message: 'Backup uploaded successfully. It now appears in the list below and can be restored.',
+        };
+    });
+
     fastify.get('/', async (request, reply) => {
         const settings = await fastify.knex('settings').select('*');
 

@@ -52,7 +52,8 @@ export default function DriversPage() {
     const [hoveredDriverId, setHoveredDriverId] = useState<number | null>(null);
     const [hoveredPrinterId, setHoveredPrinterId] = useState<number | null>(null);
 
-    const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
+    // Menggunakan relative URL agar berjalan di Cloudflare Tunnel dan IP lokal
+    const API_URL = '';
 
     const loadData = useCallback(async () => {
         try {

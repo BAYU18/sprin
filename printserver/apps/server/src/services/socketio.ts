@@ -1,5 +1,6 @@
 import { Server } from 'socket.io';
 import { logger } from '../utils/logger.js';
+import { cache, cacheKeys } from '../utils/cache.js';
 
 export function setupSocketIO(fastify: any) {
     const io = new Server(fastify.server, {
@@ -69,6 +70,26 @@ export function setupSocketIO(fastify: any) {
         socket.on('error', (error) => {
             logger.error(`[Socket.IO] Socket error:`, error);
         });
+    });
+
+    // ── TIER-2 #1: Global cache invalidation hooks ──────────────────────────
+    // When any printer/client/job-stats event fires, blow away the
+    // corresponding cache key so the next API call re-reads the DB.
+    const PRINTER_EVENTS = [
+        'printer:update', 'printer:created', 'printer:deleted', 'printer:updated',
+        'printer:status', 'printer:offline', 'printer:driver-assigned',
+        'printer:failover', 'printer:auto-removed', 'printer:queue-cleared'
+    ];
+    for (const evt of PRINTER_EVENTS) {
+        io.on(evt, () => {
+            cache.invalidate(cacheKeys.printersList('default')).catch(() => {});
+        });
+    }
+    io.on('client:heartbeat', () => {
+        cache.invalidate(cacheKeys.clientsList()).catch(() => {});
+    });
+    io.on('client:status-changed', () => {
+        cache.invalidate(cacheKeys.clientsList()).catch(() => {});
     });
 
     fastify.decorate('io', io);

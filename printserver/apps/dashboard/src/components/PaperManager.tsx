@@ -37,7 +37,8 @@ export default function PaperManager({ compact = false }: { compact?: boolean })
       setCustomSizes(custom.data.custom);
       setDefaultName(def.data.default);
     } catch (err: any) {
-      setMessage({ type: 'error', text: 'Failed to load paper sizes' });
+      console.error('FETCH ALL PAPER ERROR:', err);
+      setMessage({ type: 'error', text: `Failed to load paper sizes: ${err.message || err}` });
     } finally {
       setLoading(false);
     }

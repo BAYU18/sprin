@@ -69,22 +69,71 @@ export default function ClientsPage() {
     );
   }
 
-  // Calculate dynamic stats
-  const totalClients = clients.length;
-  const onlineClients = clients.filter(c => c.is_online).length;
-  const offlineClients = totalClients - onlineClients;
-  
-  // Total printers across all nodes
-  const totalPrintersCount = clients.reduce((acc, c) => {
-    const list = c.metadata?.printers || [];
-    return acc + list.length;
-  }, 0);
-
   const getClientIcon = (platform: string = '') => {
     const plat = platform.toLowerCase();
     if (plat.includes('win') || plat.includes('microsoft')) return <Cpu size={18} />;
     return <Server size={18} />;
   };
+
+  // Convert "win32 10.0.19045" or "Windows 10 (10.0.19045)" → friendly badge.
+  const formatOsLabel = (os: string = ''): string => {
+    const o = os.toLowerCase();
+    if (o.includes('windows 11')) return 'Windows 11';
+    if (o.includes('windows 10')) return 'Windows 10';
+    if (o.includes('windows 8.1')) return 'Windows 8.1';
+    if (o.includes('windows 8'))  return 'Windows 8';
+    if (o.includes('windows 7'))  return 'Windows 7';
+    if (o.includes('windows vista')) return 'Windows Vista';
+    // Fallback: keep whatever the agent sent
+    return os || 'Unknown OS';
+  };
+
+  // Detect link-local IPv6 / IPv4-mapped / loopback — anything useless for LAN.
+  const isUnroutableAddress = (ip: string = ''): boolean => {
+    if (!ip) return true;
+    const l = ip.toLowerCase().trim();
+    if (l === '::1' || l.startsWith('fe80:') || l.startsWith('fec0:') ||
+        l.startsWith('::ffff:127.') || l === '127.0.0.1') return true;
+    return false;
+  };
+
+  // Return a copy of the client with ip_address normalised to a routable IPv4.
+  // Priority: explicit column → metadata.ip → first private IPv4 in metadata.interfaces.
+  const normaliseClient = (c: any) => {
+    if (!c) return c;
+    const md = c.metadata || {};
+    const interfaces: any[] = Array.isArray(md.interfaces) ? md.interfaces : [];
+
+    if (!isUnroutableAddress(c.ip_address) && c.ip_address) {
+      return { ...c, _ip_quality: 'ok' };
+    }
+
+    // Try metadata.interfaces
+    const isPrivateIPv4 = (a: string) =>
+      /^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)/.test(a);
+    const candidate =
+      interfaces.find((i: any) => i.address && isPrivateIPv4(i.address) && i.family === 'IPv4') ||
+      interfaces.find((i: any) => i.address && i.family === 'IPv4' && !/^fe80:/i.test(i.address)) ||
+      null;
+
+    if (candidate) {
+      return { ...c, ip_address: candidate.address, _ip_quality: 'recovered' };
+    }
+    return c;
+  };
+
+  // Calculate dynamic stats (use normalised list so "online" reflects what's
+  // actually shown on screen, not whatever the database row originally had).
+  const normalisedClients = clients.map(normaliseClient);
+  const totalClients = normalisedClients.length;
+  const onlineClients = normalisedClients.filter(c => c.is_online).length;
+  const offlineClients = totalClients - onlineClients;
+  
+  // Total printers across all nodes
+  const totalPrintersCount = normalisedClients.reduce((acc, c) => {
+    const list = c.metadata?.printers || [];
+    return acc + list.length;
+  }, 0);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
@@ -197,7 +246,7 @@ export default function ClientsPage() {
       </div>
 
       {/* ── Client Cards Grid ───────────────────────────────────────────── */}
-      {clients.length === 0 ? (
+      {normalisedClients.length === 0 ? (
         <div className="card text-center py-12" style={{ padding: '48px', textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
           <div style={{
             width: '64px', height: '64px', borderRadius: '50%',
@@ -216,7 +265,7 @@ export default function ClientsPage() {
         </div>
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '24px' }}>
-          {clients.map((client) => {
+          {normalisedClients.map((client) => {
             const printers = client.metadata?.printers || [];
             return (
               <div key={client.id} className="card" style={{ display: 'flex', flexDirection: 'column', padding: '20px', minHeight: '320px', justifyContent: 'space-between' }}>
@@ -240,6 +289,11 @@ export default function ClientsPage() {
                         </h3>
                         <span style={{ fontSize: '11px', fontFamily: "'Share Tech Mono', monospace", color: 'var(--text-muted)' }}>
                           {client.ip_address || 'No Registered IP'}
+                          {client._ip_quality === 'recovered' && (
+                            <span style={{ marginLeft: '6px', color: 'var(--accent-amber)', fontSize: '9px' }} title="Recovered from metadata.interfaces (column was link-local)">
+                              (recovered)
+                            </span>
+                          )}
                         </span>
                       </div>
                     </div>
@@ -264,11 +318,21 @@ export default function ClientsPage() {
                     borderRadius: '8px', border: '1px solid var(--border)',
                     marginBottom: '16px'
                   }}>
+                    {/* IP Address — dedicated row */}
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px' }}>
-                      <span style={{ color: 'var(--text-muted)' }}>OS Platform</span>
+                      <span style={{ color: 'var(--text-muted)' }}>IP Address</span>
+                      <span style={{ fontFamily: "'Share Tech Mono', monospace", color: isUnroutableAddress(client.ip_address) ? 'var(--accent-red)' : 'var(--accent-cyan)' }}>
+                        {isUnroutableAddress(client.ip_address)
+                          ? (client.ip_address || '— link-local only')
+                          : client.ip_address}
+                      </span>
+                    </div>
+                    {/* OS Version — friendly name */}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px' }}>
+                      <span style={{ color: 'var(--text-muted)' }}>Operating System</span>
                       <span style={{ display: 'flex', alignItems: 'center', gap: '4px', color: 'var(--text-primary)' }}>
                         {getClientIcon(client.os_version)}
-                        {client.os_version || 'Unknown OS'}
+                        {formatOsLabel(client.os_version)}
                       </span>
                     </div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px' }}>

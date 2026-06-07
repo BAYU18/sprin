@@ -244,8 +244,11 @@ export async function setupNodesRoutes(fastify: FastifyInstance) {
 
             // HARDWARE ERROR TELEMETRY ALERTS
             if (printer.status === 'error' && printer.telemetry && printer.telemetry.hardwareError) {
+                // Lookup Windows Node info for this alert
+                const node = await fastify.knex('windows_nodes').where({ id }).first();
+
                 const existingAlert = await fastify.knex('alerts')
-                    .where({ node_id: id, type: 'hardware_error', resolved: false })
+                    .where({ node_id: id, type: 'hardware_error', is_resolved: false })
                     .andWhereRaw("metadata->>'printer_name' = ?", [printer.name])
                     .first();
                     
@@ -259,11 +262,15 @@ export async function setupNodesRoutes(fastify: FastifyInstance) {
                             printer_name: printer.name, 
                             error_code: printer.telemetry.errorStateCode,
                             status_code: printer.telemetry.printerStatusCode,
-                            error_msg: printer.telemetry.hardwareError 
+                            error_msg: printer.telemetry.hardwareError,
+                            node_hostname: node?.hostname || 'Unknown',
+                            node_ip: node?.ip_address || 'Unknown',
+                            node_os: node?.os_version || 'Unknown',
+                            agent_version: node?.node_version || 'Unknown'
                         }),
-                        resolved: false
+                        is_resolved: false
                     });
-                    logger.warn(`[HardwareTelemetry] Auto-Alert created for ${printer.name}: ${printer.telemetry.hardwareError}`);
+                    logger.warn(`[HardwareTelemetry] Auto-Alert created for ${printer.name} on node ${node?.hostname} (${node?.ip_address}): ${printer.telemetry.hardwareError}`);
                 }
             }
         }

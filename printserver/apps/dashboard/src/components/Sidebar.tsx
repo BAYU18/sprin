@@ -224,33 +224,38 @@ export default function Sidebar({ isOpen = false, onClose }: SidebarProps) {
     }
   };
 
-  // Tone → CSS class map. Keep classes in global stylesheet; fall back to
-  // inline styles if a class is missing.
+  // Tone → CSS class map. Cyberpunk notched shape comes from .nav-badge class
+  // in globals.css — we only override the per-tone color accents here.
   const badgeStyle = (tone: 'danger' | 'warn' | 'ok' | 'mute'): React.CSSProperties => {
     switch (tone) {
       case 'danger':
         return {
-          background: 'rgba(239,68,68,0.18)',
           color: '#fca5a5',
-          border: '1px solid rgba(239,68,68,0.5)',
+          // Per-tone overrides for the notched shape (background, border, glow)
+          ['--badge-bg' as any]: 'rgba(239,68,68,0.18)',
+          ['--badge-border' as any]: 'rgba(239,68,68,0.55)',
+          ['--badge-glow' as any]: 'rgba(239,68,68,0.25)',
         };
       case 'warn':
         return {
-          background: 'rgba(255,184,0,0.18)',
           color: '#fbbf24',
-          border: '1px solid rgba(255,184,0,0.5)',
+          ['--badge-bg' as any]: 'rgba(255,184,0,0.18)',
+          ['--badge-border' as any]: 'rgba(255,184,0,0.55)',
+          ['--badge-glow' as any]: 'rgba(255,184,0,0.25)',
         };
       case 'ok':
         return {
-          background: 'rgba(0,212,255,0.18)',
           color: '#67e8f9',
-          border: '1px solid rgba(0,212,255,0.5)',
+          ['--badge-bg' as any]: 'rgba(0,212,255,0.18)',
+          ['--badge-border' as any]: 'rgba(0,212,255,0.55)',
+          ['--badge-glow' as any]: 'rgba(0,212,255,0.25)',
         };
       case 'mute':
         return {
-          background: 'rgba(148,163,184,0.18)',
           color: '#cbd5e1',
-          border: '1px solid rgba(148,163,184,0.5)',
+          ['--badge-bg' as any]: 'rgba(148,163,184,0.18)',
+          ['--badge-border' as any]: 'rgba(148,163,184,0.55)',
+          ['--badge-glow' as any]: 'rgba(148,163,184,0.25)',
         };
     }
   };

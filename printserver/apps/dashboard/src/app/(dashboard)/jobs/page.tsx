@@ -84,6 +84,9 @@ export default function JobsPage() {
   const [page, setPage] = useState(1);
   const [status, setStatus] = useState('');
   const [search, setSearch] = useState('');
+  // TIER-2 #4: mobile filter drawer state
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [queueStats, setQueueStats] = useState<any>(null);
 
   // Derived counts from current page data (best-effort without extra API call)
   const counts = jobs.reduce(
@@ -235,11 +238,7 @@ export default function JobsPage() {
       </div>
 
       {/* ── Stat cards ──────────────────────────────────────────────────── */}
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(5, 1fr)',
-        gap: '16px',
-      }}>
+      <div className="kpi-grid">
         {([
           { key: 'total',      label: 'Total Jobs',  value: total,                     Icon: FileText,     accent: statAccents.total      },
           { key: 'queued',     label: 'Queued',       value: counts.queued     ?? 0,    Icon: Clock,        accent: statAccents.queued      },
@@ -267,8 +266,8 @@ export default function JobsPage() {
         ))}
       </div>
 
-      {/* ── Filter toolbar ───────────────────────────────────────────────── */}
-      <div className="card" style={{ padding: '16px 20px' }}>
+      {/* ── Filter toolbar (desktop only, mobile uses drawer) ─────── */}
+      <div className="card desktop-only" style={{ padding: '16px 20px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
 
           {/* Search */}
@@ -347,7 +346,7 @@ export default function JobsPage() {
         </div>
       </div>
 
-      {/* ── Table card ───────────────────────────────────────────────────── */}
+      {/* ── Table card (desktop + mobile) ─────────────────────────────── */}
       <div className="card" style={{ padding: '0', overflow: 'hidden' }}>
 
         {/* Table title bar */}
@@ -748,6 +747,78 @@ export default function JobsPage() {
           </div>
         </div>
       </div>
+
+      {/* ── Mobile bottom action bar ────────────────────────────── */}
+      <div className="mobile-action-bar" style={{ paddingBottom: 'calc(10px + 60px)' /* extra for pagination */ }}>
+        <button onClick={() => setDrawerOpen(true)}>
+          <Filter size={16} /> Filter
+        </button>
+        <button onClick={fetchJobs} disabled={loading}>
+          <RefreshCw size={16} style={loading ? { animation: 'spin 0.8s linear infinite' } : undefined} />
+          Refresh
+        </button>
+      </div>
+
+      {/* ── Mobile filter drawer ─────────────────────────────────── */}
+      {drawerOpen && (
+        <div className="mobile-drawer" onClick={() => setDrawerOpen(false)}>
+          <div className="drawer-content" onClick={(e) => e.stopPropagation()}>
+            <div className="drawer-handle" />
+            <h3 style={{ margin: 0, fontSize: '15px', fontWeight: 600, color: 'var(--text-primary)' }}>
+              Filter Jobs
+            </h3>
+            <div>
+              <label style={{ display: 'block', fontSize: '11px', color: 'var(--text-muted)', marginBottom: '4px', textTransform: 'uppercase' }}>
+                Search
+              </label>
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search jobs..."
+                className="input"
+                style={{ width: '100%' }}
+              />
+            </div>
+            <div>
+              <label style={{ display: 'block', fontSize: '11px', color: 'var(--text-muted)', marginBottom: '4px', textTransform: 'uppercase' }}>
+                Status
+              </label>
+              <select
+                value={status}
+                onChange={(e) => { setPage(1); setStatus(e.target.value); }}
+                className="input"
+                style={{ width: '100%', appearance: 'none' }}
+              >
+                <option value="">All Status</option>
+                <option value="queued">Queued</option>
+                <option value="held">Held</option>
+                <option value="processing">Processing</option>
+                <option value="completed">Completed</option>
+                <option value="failed">Failed</option>
+                <option value="cancelled">Cancelled</option>
+              </select>
+            </div>
+            <button
+              onClick={() => { fetchJobs(); setDrawerOpen(false); }}
+              className="btn-primary"
+              style={{ minHeight: '44px', marginTop: '4px' }}
+            >
+              Apply Filter
+            </button>
+            <button
+              onClick={() => { setSearch(''); setStatus(''); setPage(1); }}
+              style={{
+                minHeight: '44px', background: 'transparent',
+                border: '1px solid var(--border)', color: 'var(--text-muted)',
+                borderRadius: '8px', cursor: 'pointer',
+              }}
+            >
+              Clear Filters
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

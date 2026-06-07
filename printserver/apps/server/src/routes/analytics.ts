@@ -124,4 +124,22 @@ export async function setupAnalyticsRoutes(fastify: FastifyInstance) {
 
         return deptStats;
     });
+
+    fastify.get('/paper/usage', async (request, reply) => {
+        try {
+            const paperUsage = await fastify.knex('print_jobs')
+                .select(
+                    fastify.knex.raw('COALESCE(paper_size, \'Unknown\') as paper_size'),
+                    fastify.knex.raw('COUNT(id) as job_count'),
+                    fastify.knex.raw('COALESCE(SUM(pages), 0) as total_pages')
+                )
+                .groupByRaw('COALESCE(paper_size, \'Unknown\')')
+                .orderBy('total_pages', 'desc');
+
+            return paperUsage;
+        } catch (error) {
+            request.log.error('Failed to fetch paper usage analytics:', error);
+            return reply.status(500).send({ error: 'Internal Server Error' });
+        }
+    });
 }

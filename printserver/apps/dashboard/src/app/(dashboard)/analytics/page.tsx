@@ -35,20 +35,23 @@ export default function AnalyticsPage() {
   const [printerUsage, setPrinterUsage] = useState<any[]>([]);
   const [topUsers, setTopUsers] = useState<any[]>([]);
   const [departments, setDepartments] = useState<any[]>([]);
+  const [paperUsage, setPaperUsage] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   const fetchData = async () => {
     try {
-      const [volumeRes, printersRes, usersRes, deptRes] = await Promise.all([
+      const [volumeRes, printersRes, usersRes, deptRes, paperRes] = await Promise.all([
         analyticsApi.volume(30),
         analyticsApi.printersUsage(),
         analyticsApi.topUsers(10),
-        analyticsApi.departments()
+        analyticsApi.departments(),
+        analyticsApi.paperUsage()
       ]);
       setVolumeData(volumeRes.data || []);
       setPrinterUsage(printersRes.data || []);
       setTopUsers(usersRes.data || []);
       setDepartments(deptRes.data || []);
+      setPaperUsage(paperRes.data || []);
     } catch (error) {
       console.error('Failed to fetch analytics:', error);
     } finally {
@@ -91,7 +94,7 @@ export default function AnalyticsPage() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
       {/* Title + Action bar */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+      <div className="desktop-only" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
           <BarChart2 style={{ color: 'var(--accent-cyan)', width: '28px', height: '28px' }} />
           <h1 style={{ fontSize: '24px', fontWeight: 700, fontFamily: 'Rajdhani', textTransform: 'uppercase', letterSpacing: '1px', margin: 0 }}>
@@ -102,6 +105,15 @@ export default function AnalyticsPage() {
           <RefreshCw style={{ width: '16px', height: '16px' }} />
           Refresh
         </button>
+      </div>
+      {/* Mobile title (more compact) */}
+      <div className="mobile-only" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <BarChart2 style={{ color: 'var(--accent-cyan)', width: '22px', height: '22px' }} />
+          <h1 style={{ fontSize: '18px', fontWeight: 700, fontFamily: 'Rajdhani', textTransform: 'uppercase', letterSpacing: '1px', margin: 0 }}>
+            Analytics
+          </h1>
+        </div>
       </div>
 
       {/* Stat cards row */}
@@ -174,7 +186,7 @@ export default function AnalyticsPage() {
       </div>
 
       {/* Charts container */}
-      <div className="charts-row">
+      <div className="grid-2col">
         {/* Card 1: Print Volume (30 Days) */}
         <div className="chart-card" style={{ '--index': 0 } as React.CSSProperties}>
           <div className="chart-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -262,7 +274,7 @@ export default function AnalyticsPage() {
       </div>
 
       {/* Ranked tables row */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px' }}>
+      <div className="grid-2col">
         {/* Top Users Table Card */}
         <div className="card" style={{ padding: '24px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '20px', paddingBottom: '12px', borderBottom: '1px solid var(--border)' }}>
@@ -445,49 +457,64 @@ export default function AnalyticsPage() {
       </div>
 
       {/* Pie Chart & Failure Analysis Row */}
-      <div style={{ display: 'grid', gridTemplateColumns: '0.8fr 1.2fr', gap: '24px' }}>
-        {/* Department Distribution PieChart */}
+      <div className="grid-2col-asym">
+        {/* Paper Usage PieChart */}
         <div className="chart-card" style={{ '--index': 2 } as React.CSSProperties}>
           <div className="chart-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <PieIcon style={{ width: '18px', height: '18px', color: 'var(--accent-cyan)' }} />
-            <span>Department Distribution</span>
+            <span>Paper Size Distribution</span>
           </div>
           <div style={{ height: '260px', width: '100%' }}>
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie
-                  data={departments}
-                  dataKey="pages"
-                  nameKey="department"
+                  data={paperUsage.length > 0 ? paperUsage : [{ paper_size: 'A4', total_pages: 1 }]}
+                  dataKey="total_pages"
+                  nameKey="paper_size"
                   cx="50%"
                   cy="50%"
                   outerRadius={75}
                   innerRadius={45}
                   paddingAngle={3}
-                  label={({ department, percent }) =>
-                    `${department} (${(percent * 100).toFixed(0)}%)`
+                  label={({ paper_size, percent }) =>
+                    `${paper_size} (${(percent * 100).toFixed(0)}%)`
                   }
                   labelLine={false}
                   style={{ fontSize: '10px', fill: 'var(--text-primary)', fontFamily: 'Rajdhani', fontWeight: 600 }}
                 >
-                  {departments.map((entry, index) => (
+                  {(paperUsage.length > 0 ? paperUsage : [{ paper_size: 'A4', total_pages: 1 }]).map((entry, index) => (
                     <Cell key={`cell-${index}`} fill={DARK_COLORS[index % DARK_COLORS.length]} />
                   ))}
                 </Pie>
                 <Tooltip
-                  contentStyle={{
-                    backgroundColor: 'var(--bg-secondary)',
-                    borderColor: 'var(--border)',
-                    borderRadius: '8px',
-                    color: 'var(--text-primary)',
-                    boxShadow: 'var(--shadow-hover)'
-                  }}
+                  contentStyle={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: '8px' }}
                   itemStyle={{ color: 'var(--text-primary)' }}
-                  labelStyle={{ color: 'var(--text-muted)', fontFamily: 'Rajdhani', fontWeight: 600 }}
+                  formatter={(value: number, name: string) => [value, `${name} Pages`]}
                 />
               </PieChart>
             </ResponsiveContainer>
           </div>
+          {/* TIER-2 #5: scrollable legend (always visible, since pie labels overflow on small screens) */}
+          {paperUsage.length > 0 && (
+            <div className="scroll-x" style={{
+              display: 'flex', gap: '12px', flexWrap: 'nowrap',
+              marginTop: '8px', paddingBottom: '4px',
+            }}>
+              {paperUsage.map((entry, index) => (
+                <div key={index} style={{
+                  display: 'flex', alignItems: 'center', gap: '6px',
+                  fontSize: '11px', color: 'var(--text-muted)', flexShrink: 0,
+                  fontFamily: 'Share Tech Mono',
+                }}>
+                  <span style={{
+                    width: '10px', height: '10px', borderRadius: '2px',
+                    background: DARK_COLORS[index % DARK_COLORS.length],
+                  }} />
+                  {entry.paper_size} • {Number(entry.total_pages || 0).toLocaleString()}pgs
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Print Failure Analysis (using departments placeholder) */}
@@ -554,6 +581,13 @@ export default function AnalyticsPage() {
             </table>
           </div>
         </div>
+      </div>
+
+      {/* ── Mobile bottom action bar (Refresh) ──────────────────── */}
+      <div className="mobile-action-bar" style={{ paddingBottom: 'calc(10px + env(safe-area-inset-bottom))' }}>
+        <button onClick={fetchData} style={{ minHeight: '48px' }}>
+          <RefreshCw size={16} /> Refresh Analytics
+        </button>
       </div>
     </div>
   );

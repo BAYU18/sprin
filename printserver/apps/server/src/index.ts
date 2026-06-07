@@ -6,6 +6,7 @@ import jwt from '@fastify/jwt';
 import rateLimit from '@fastify/rate-limit';
 import websocket from '@fastify/websocket';
 import staticFiles from '@fastify/static';
+import multipart from '@fastify/multipart';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { setupDatabase } from './db/knex.js';
@@ -55,6 +56,14 @@ async function buildServer() {
 
     await fastify.register(websocket);
 
+    // Multipart parser for backup uploads (max 100MB per file)
+    await fastify.register(multipart, {
+        limits: {
+            fileSize: 100 * 1024 * 1024,
+            files: 1,
+        },
+    });
+
     await fastify.register(staticFiles, {
         root: path.join(__dirname, '../../dashboard'),
         prefix: '/',
@@ -76,6 +85,8 @@ async function buildServer() {
     await setupDatabase(fastify);
     await setupRedis(fastify);
     await setupBullMQ(fastify);
+    // TIER-2 #1: warm up cache connection so /api/health is accurate on first hit
+    import('./utils/cache.js').then(m => m.cache.ping()).catch(() => {});
     await setupSocketIO(fastify);
     await setupMetrics(fastify);
 

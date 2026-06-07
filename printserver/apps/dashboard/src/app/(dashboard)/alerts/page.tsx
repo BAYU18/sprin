@@ -403,6 +403,15 @@ export default function AlertsPage() {
                   </p>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginTop: '6px', fontSize: '11px', fontFamily: 'Share Tech Mono, monospace', color: 'var(--text-dim)', flexWrap: 'wrap' }}>
                     <span>{format(new Date(alert.created_at), 'yyyy-MM-dd HH:mm:ss')}</span>
+                    {alert.metadata?.node_hostname && alert.metadata?.node_hostname !== 'Unknown' && (
+                      <span>Node: <strong style={{ color: 'var(--accent-cyan)' }}>{alert.metadata.node_hostname}</strong></span>
+                    )}
+                    {alert.metadata?.node_ip && alert.metadata?.node_ip !== 'Unknown' && (
+                      <span>IP: <strong style={{ color: 'var(--accent-cyan)' }}>{alert.metadata.node_ip}</strong></span>
+                    )}
+                    {alert.metadata?.node_os && alert.metadata?.node_os !== 'Unknown' && (
+                      <span>OS: <strong style={{ color: 'var(--text-muted)' }}>{alert.metadata.node_os}</strong></span>
+                    )}
                     {alert.client_name && <span>Client: <strong style={{ color: 'var(--text-muted)' }}>{alert.client_name}</strong></span>}
                     {alert.printer_name && <span>Printer: <strong style={{ color: 'var(--text-muted)' }}>{alert.printer_name}</strong></span>}
                   </div>

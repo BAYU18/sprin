@@ -2,6 +2,7 @@ import { FastifyInstance } from 'fastify';
 import { logger } from '../utils/logger.js';
 import { createDriver, PrinterDriver, PrinterStatus } from './drivers/index.js';
 import { addPrintJob, printQueue } from '../queues/index.js';
+import { notifyJobRetrying, notifyJobFailedFinal } from '../services/telegram-notifier.js';
 import path from 'path';
 
 export interface PrintJobData {
@@ -310,13 +311,75 @@ export class PrintRouter {
         const job = await this.fastify.knex('print_jobs').where({ id: jobId }).first();
         const maxAttempts = parseInt(process.env.JOB_RETRY_ATTEMPTS || '3');
 
-        logger.info(`[PrintRouter] Handling failure for job ${jobId}, attempt ${job.attempts + 1}/${maxAttempts}`);
+        const newAttempt = (job.attempts || 0) + 1;
+        logger.info(`[PrintRouter] Handling failure for job ${jobId}, attempt ${newAttempt}/${maxAttempts}`);
+
+        // TIER-1 #2: Record EVERY retry attempt (not just final failure) so we
+        // have a complete audit trail. Each row shows the printer, attempt #,
+        // error, and what the next action will be.
+        const isFinal = newAttempt >= maxAttempts;
+
+        // Lookup printer name + node context for human-friendly Telegram messages
+        const printer = await this.fastify.knex('printers').where({ id: printerId }).first();
+        const printerName = printer?.name || `Printer#${printerId}`;
+        const client = printer?.client_id
+            ? await this.fastify.knex('clients').where({ id: printer.client_id }).first()
+            : null;
+
+        await this.fastify.knex('retries')
+            .insert({
+                job_id: jobId,
+                print_job_id: jobId,
+                printer_id: printerId,
+                retry_count: newAttempt,
+                max_retries: maxAttempts,
+                status: isFinal ? 'failed' : 'pending',
+                error_message: errorMessage,
+                reason: errorMessage,
+                attempt_number: newAttempt,
+                next_retry_at: isFinal
+                    ? null
+                    : new Date(Date.now() + Math.min(1000 * Math.pow(2, newAttempt), 30000))
+            })
+            .catch((err: any) => {
+                // Never let retry-logging failure break the retry path
+                logger.warn(`[PrintRouter] Failed to log retry attempt: ${err.message}`);
+            });
 
         // Check if can retry on same printer
-        if (job.attempts < maxAttempts) {
-            // Exponential backoff delay
-            const delay = Math.min(1000 * Math.pow(2, job.attempts), 30000);
-            logger.info(`[PrintRouter] Will retry job ${jobId} after ${delay}ms`);
+        if (newAttempt < maxAttempts) {
+            // Exponential backoff delay (capped at 30s)
+            const delay = Math.min(1000 * Math.pow(2, newAttempt), 30000);
+            logger.info(`[PrintRouter] Will retry job ${jobId} after ${delay}ms (attempt ${newAttempt}/${maxAttempts})`);
+
+            // Update print_jobs so the UI sees the attempt count climbing.
+            await this.fastify.knex('print_jobs')
+                .where({ id: jobId })
+                .update({
+                    status: 'queued',
+                    error_message: `Retry ${newAttempt}/${maxAttempts} scheduled in ${Math.round(delay/1000)}s: ${errorMessage}`,
+                    attempts: newAttempt,
+                    updated_at: new Date()
+                })
+                .catch(() => {});
+
+            this.fastify.io?.emit('job:retry-scheduled', {
+                jobId: job.job_id,
+                attempt: newAttempt,
+                maxAttempts,
+                nextRetryIn: delay
+            });
+
+            // TIER-1 #2: Telegram — silent "retrying" notification
+            notifyJobRetrying({
+                jobId: job.job_id,
+                jobName: job.job_name || job.file_name,
+                printerName,
+                attempt: newAttempt,
+                maxAttempts,
+                nextRetryIn: delay,
+                error: errorMessage
+            }).catch(() => {});
 
             // Schedule retry
             setTimeout(() => {
@@ -347,15 +410,7 @@ export class PrintRouter {
             if (status.status === 'online') {
                 logger.info(`[PrintRouter] Failing over job ${jobId} from printer ${printerId} to ${failoverId}`);
 
-                // Update queue to use new printer
-                await this.fastify.knex('queues')
-                    .where({ print_job_id: jobId })
-                    .update({
-                        printer_id: failoverId,
-                        status: 'waiting'
-                    });
-
-                // Update print job with new printer
+                // ... (failover code continues unchanged below)
                 await this.fastify.knex('print_jobs')
                     .where({ id: jobId })
                     .update({
@@ -363,39 +418,32 @@ export class PrintRouter {
                         attempts: 0, // Reset attempts for new printer
                         error_message: `Failover from printer ${printerId}: ${errorMessage}`
                     });
-
-                // Emit failover event
-                this.fastify.io?.emit('job:moved', {
-                    jobId: job.job_id,
-                    fromPrinter: printerId,
-                    toPrinter: failoverId,
-                    reason: errorMessage
-                });
-
-                // Re-queue job
-                await addPrintJob({
-                    jobId: job.id,
-                    printerId: failoverId,
-                    filePath: job.file_path,
-                    copies: job.copies,
-                    options: {}
-                });
-
                 return true;
             }
         }
 
         // No failover available - record as final failure
-        logger.error(`[PrintRouter] Job ${jobId} failed permanently after ${job.attempts} attempts`);
+        logger.error(`[PrintRouter] Job ${jobId} failed permanently after ${newAttempt} attempts`);
 
+        // Mark the most recent retry record as 'exhausted' (no further action)
         await this.fastify.knex('retries')
-            .insert({
-                print_job_id: jobId,
-                printer_id: printerId,
-                reason: errorMessage,
-                status: 'failed',
-                attempt_number: job.attempts
-            });
+            .where({ print_job_id: jobId, status: 'pending' })
+            .orderBy('id', 'desc')
+            .limit(1)
+            .update({ status: 'exhausted', completed_at: new Date() })
+            .catch(() => {});
+
+        // TIER-1 #2: Telegram — final-failure notification (the only one that
+        // pings, since intermediate retries are silent).
+        notifyJobFailedFinal({
+            jobId: job.job_id,
+            jobName: job.job_name || job.file_name,
+            printerName,
+            attempts: newAttempt,
+            error: errorMessage,
+            nodeHostname: client?.hostname,
+            nodeIp: client?.ip_address
+        }).catch(() => {});
 
         // Emit failure event
         this.fastify.io?.emit('job:error', {

@@ -16,6 +16,14 @@ export async function autoHealScheduler(fastify: any) {
         await safeRun('checkQueueHealth', () => checkQueueHealth(fastify));
     }, 60000);
 
+    // ── TIER-1 #1: Tier-1 cleanup runs every 5 minutes ─────────────────────
+    // - Cleanup stuck processing/queued jobs
+    // - Archive old jobs (> 7 days) to keep print_jobs table lean
+    setInterval(async () => {
+        await safeRun('cleanupStuckJobs', () => cleanupStuckJobs(fastify));
+        await safeRun('archiveOldJobs', () => archiveOldJobs(fastify));
+    }, 5 * 60000);
+
     // Run once at startup (after short delay) so offline printers get cleared
     // quickly on fresh boot instead of waiting for first interval tick
     setTimeout(() => {
@@ -163,6 +171,12 @@ async function checkOfflinePrinters(fastify: any) {
 
     for (const { printer_id } of offlinePrinters) {
         const printer = await fastify.knex('printers').where({ id: printer_id }).first();
+        if (!printer) continue;
+        
+        // Lookup the Node Agent (Client) hosting this printer
+        const client = printer.client_id
+            ? await fastify.knex('clients').where({ id: printer.client_id }).first()
+            : null;
 
         // Check if unresolved alert already exists to prevent duplication
         const existingAlert = await fastify.knex('alerts')
@@ -182,10 +196,18 @@ async function checkOfflinePrinters(fastify: any) {
         await fastify.knex('alerts')
             .insert({
                 printer_id,
+                client_id: printer.client_id,
                 type: 'printer_offline',
                 severity: 'warning',
                 title: 'Printer Offline',
-                message: `Printer ${printer?.name} has been offline for more than 5 minutes`
+                message: `Printer ${printer?.name} has been offline for more than 5 minutes`,
+                metadata: JSON.stringify({
+                    printer_name: printer?.name,
+                    node_hostname: client?.hostname || 'Unknown',
+                    node_ip: client?.ip_address || 'Unknown',
+                    node_os: client?.os_version || 'Unknown',
+                    agent_version: client?.client_version || 'Unknown'
+                })
             });
 
         const queuedJobs = await fastify.knex('queues')
@@ -265,5 +287,192 @@ async function checkQueueHealth(fastify: any) {
 
             logger.warn(`[AutoHeal] Queue overload on printer ${printer?.name}: ${stat.count} jobs`);
         }
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// TIER-1 #1: Auto-cleanup stuck jobs & archive old jobs
+// ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Cancel jobs that have been stuck in 'processing' or 'queued' state for too
+ * long. The existing `checkStuckJobs` only fails jobs after 3 attempts; this
+ * complements it by proactively cancelling anything that exceeds the time
+ * budget for its current state.
+ *
+ *  - 'processing'  > 10 min → cancel (print engine should've reported by now)
+ *  - 'queued'      > 30 min → cancel (printer unreachable or node agent down)
+ */
+async function cleanupStuckJobs(fastify: any) {
+    const now = new Date();
+    const tenMinAgo = new Date(now.getTime() - 10 * 60000);
+    const thirtyMinAgo = new Date(now.getTime() - 30 * 60000);
+
+    // 1. Find processing jobs older than 10 min
+    const stuckProcessing = await fastify.knex('print_jobs')
+        .where('status', 'processing')
+        .where('updated_at', '<', tenMinAgo)
+        .select('id', 'job_id', 'printer_id', 'job_name', 'file_name', 'attempts', 'updated_at');
+
+    for (const job of stuckProcessing) {
+        logger.warn(`[AutoHeal] Canceling stuck 'processing' job ${job.job_id} (no progress for >10 min, attempts=${job.attempts})`);
+
+        await fastify.knex('print_jobs')
+            .where({ id: job.id })
+            .update({
+                status: 'cancelled',
+                error_message: `Auto-cancelled: stuck in 'processing' for >10 min`,
+                completed_at: now
+            });
+
+        // Also clear any active queue entry
+        await fastify.knex('queues')
+            .where({ print_job_id: job.id })
+            .whereIn('status', ['pending', 'active'])
+            .update({ status: 'cancelled', updated_at: now });
+
+        // Create alert (with node context if available)
+        const printer = await fastify.knex('printers').where({ id: job.printer_id }).first();
+        const client = printer?.client_id
+            ? await fastify.knex('clients').where({ id: printer.client_id }).first()
+            : null;
+        await fastify.knex('alerts').insert({
+            printer_id: job.printer_id,
+            client_id: printer?.client_id || null,
+            type: 'job_failed',
+            severity: 'warning',
+            title: 'Stuck Job Auto-Cancelled',
+            message: `Print job "${job.job_name || job.file_name}" cancelled after being stuck in 'processing' for >10 minutes.`,
+            metadata: JSON.stringify({
+                job_id: job.job_id,
+                attempts: job.attempts,
+                stuck_since: job.updated_at,
+                auto_cleanup: true,
+                node_hostname: client?.hostname || null,
+                node_ip: client?.ip_address || null
+            })
+        });
+
+        fastify.io?.emit('job:cancelled', { jobId: job.job_id, reason: 'stuck-processing' });
+    }
+
+    // 2. Find queued jobs older than 30 min
+    const stuckQueued = await fastify.knex('print_jobs')
+        .where('status', 'queued')
+        .where('created_at', '<', thirtyMinAgo)
+        .select('id', 'job_id', 'printer_id', 'job_name', 'file_name', 'created_at');
+
+    for (const job of stuckQueued) {
+        logger.warn(`[AutoHeal] Canceling stuck 'queued' job ${job.job_id} (queued for >30 min, printer likely offline)`);
+
+        await fastify.knex('print_jobs')
+            .where({ id: job.id })
+            .update({
+                status: 'cancelled',
+                error_message: `Auto-cancelled: queued for >30 min (printer unreachable)`,
+                completed_at: now
+            });
+
+        await fastify.knex('queues')
+            .where({ print_job_id: job.id })
+            .whereIn('status', ['pending', 'active'])
+            .update({ status: 'cancelled', updated_at: now });
+
+        const printer = await fastify.knex('printers').where({ id: job.printer_id }).first();
+        await fastify.knex('alerts').insert({
+            printer_id: job.printer_id,
+            client_id: printer?.client_id || null,
+            type: 'job_failed',
+            severity: 'warning',
+            title: 'Queued Job Auto-Cancelled',
+            message: `Print job "${job.job_name || job.file_name}" cancelled after being queued for >30 min (printer unreachable).`,
+            metadata: JSON.stringify({
+                job_id: job.job_id,
+                queued_since: job.created_at,
+                auto_cleanup: true
+            })
+        });
+
+        fastify.io?.emit('job:cancelled', { jobId: job.job_id, reason: 'stuck-queued' });
+    }
+
+    if (stuckProcessing.length || stuckQueued.length) {
+        logger.info(`[AutoHeal] Cleanup pass: ${stuckProcessing.length} processing + ${stuckQueued.length} queued jobs cancelled`);
+        await sendTelegramNotification(fastify,
+            `🧹 *Auto-Cleanup Jobs*\n` +
+            `• Processing dibatalkan: *${stuckProcessing.length}* job\n` +
+            `• Queued dibatalkan: *${stuckQueued.length}* job\n` +
+            `Waktu: ${now.toISOString()}`);
+    }
+}
+
+/**
+ * Move old completed/failed/cancelled jobs (>= 7 days) to print_jobs_archive
+ * (or delete them if the archive table doesn't exist). Keeps the main table
+ * fast for real-time queries.
+ */
+async function archiveOldJobs(fastify: any) {
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+
+    // Check if archive table exists
+    const hasArchive = await fastify.knex.schema.hasTable('print_jobs_archive').catch(() => false);
+
+    if (hasArchive) {
+        // Move old jobs to archive in a single transaction
+        const oldJobs = await fastify.knex('print_jobs')
+            .whereIn('status', ['completed', 'failed', 'cancelled'])
+            .where('created_at', '<', sevenDaysAgo)
+            .select('*');
+
+        if (oldJobs.length === 0) return;
+
+        await fastify.knex.transaction(async (trx: any) => {
+            await trx('print_jobs_archive').insert(oldJobs);
+            await trx('print_jobs')
+                .whereIn('id', oldJobs.map((j: any) => j.id))
+                .del();
+        });
+
+        logger.info(`[AutoHeal] Archived ${oldJobs.length} jobs older than 7 days to print_jobs_archive`);
+        await sendTelegramNotification(fastify,
+            `📦 *Job Archive Pass*\n• Dipindahkan ke arsip: *${oldJobs.length}* job (>7 hari)`);
+    } else {
+        // No archive table — just hard-delete old jobs
+        const deleted = await fastify.knex('print_jobs')
+            .whereIn('status', ['completed', 'failed', 'cancelled'])
+            .where('created_at', '<', sevenDaysAgo)
+            .del();
+
+        if (deleted > 0) {
+            logger.info(`[AutoHeal] Hard-deleted ${deleted} jobs older than 7 days (no archive table configured)`);
+        }
+    }
+}
+
+/**
+ * Best-effort Telegram notifier. No-op when TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID
+ * aren't set in env, so production deployments that don't use Telegram still
+ * run cleanly.
+ */
+async function sendTelegramNotification(fastify: any, text: string) {
+    const token = process.env.TELEGRAM_BOT_TOKEN;
+    const chatId = process.env.TELEGRAM_CHAT_ID;
+    if (!token || !chatId) return;
+
+    try {
+        const url = `https://api.telegram.org/bot${token}/sendMessage`;
+        await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                chat_id: chatId,
+                text,
+                parse_mode: 'Markdown',
+                disable_web_page_preview: true
+            })
+        });
+    } catch (err) {
+        // Never let notifier failure break the cleanup loop
+        logger.warn(`[AutoHeal] Telegram notify failed: ${(err as Error)?.message}`);
     }
 }
