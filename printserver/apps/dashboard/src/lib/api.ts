@@ -12,9 +12,23 @@ const api = axios.create({
 
 api.interceptors.request.use((config) => {
   if (typeof window !== 'undefined') {
-    const token = localStorage.getItem('token');
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`;
+    // Read token from Zustand persist storage (key: 'auth-storage')
+    try {
+      const stored = localStorage.getItem('auth-storage');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        // Zustand persist stores state under a 'state' wrapper
+        const token = parsed.state?.token || parsed.token;
+        if (token) {
+          config.headers.Authorization = `Bearer ${token}`;
+        }
+      }
+    } catch {
+      // Fallback: try standalone token key
+      const token = localStorage.getItem('token');
+      if (token) {
+        config.headers.Authorization = `Bearer ${token}`;
+      }
     }
   }
   return config;
@@ -25,8 +39,10 @@ api.interceptors.response.use(
   (error) => {
     if (error.response?.status === 401 || error.response?.status === 403) {
       if (typeof window !== 'undefined') {
+        // Clear Zustand persist storage (auth-storage contains { user, token, isAuthenticated })
+        localStorage.removeItem('auth-storage');
+        // Also clear any standalone token (for safety)
         localStorage.removeItem('token');
-        localStorage.removeItem('user');
         window.location.href = '/login';
       }
     }

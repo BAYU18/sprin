@@ -97,6 +97,33 @@ export async function setupJobsRoutes(fastify: FastifyInstance) {
             const body = submitJobSchema.parse(request.body);
             const userId = (request as any).user?.id || 1;
             const clientId = body.options?.clientId || 1;
+            const copies = body.copies || 1;
+
+            // Quota enforcement: check user's monthly page quota before submitting
+            const userRow = await fastify.knex('users')
+                .select('quota_pages', 'quota_used', 'username', 'is_active')
+                .where({ id: userId })
+                .first();
+
+            if (userRow) {
+                if (userRow.is_active === false) {
+                    return reply.status(403).send({
+                        error: 'Account disabled',
+                        message: `User "${userRow.username}" is inactive. Contact administrator.`
+                    });
+                }
+                const quotaPages = userRow.quota_pages ?? 1000;
+                const quotaUsed = userRow.quota_used ?? 0;
+                if (quotaUsed + copies > quotaPages) {
+                    return reply.status(429).send({
+                        error: 'Quota exceeded',
+                        message: `User "${userRow.username}" has used ${quotaUsed}/${quotaPages} pages. This job needs ${copies} more. Quota exceeded.`,
+                        quota_pages: quotaPages,
+                        quota_used: quotaUsed,
+                        requested: copies
+                    });
+                }
+            }
 
             const result = await fastify.printRouter.submitJob({
                 userId,
@@ -105,9 +132,16 @@ export async function setupJobsRoutes(fastify: FastifyInstance) {
                 filePath: body.filePath,
                 fileName: body.fileName,
                 fileType: body.fileType,
-                copies: body.copies,
+                copies,
                 options: body.options || {}
             });
+
+            // Increment quota_used for this user
+            if (userRow) {
+                await fastify.knex('users')
+                    .where({ id: userId })
+                    .increment('quota_used', copies);
+            }
 
             // Invalidate jobs list and stats caches
             await cache.invalidate('jobs:*');
@@ -123,7 +157,18 @@ export async function setupJobsRoutes(fastify: FastifyInstance) {
         const { jobId } = request.params as { jobId: string };
 
         try {
+            // Look up job to refund quota if not yet completed
+            const job = await fastify.knex('print_jobs')
+                .where({ job_id: jobId })
+                .select('id', 'user_id', 'status', 'copies')
+                .first();
             const result = await fastify.printRouter.cancelJob(jobId);
+            // Refund quota if job was cancelled before completion
+            if (job && job.user_id && job.status !== 'completed') {
+                await fastify.knex('users')
+                    .where({ id: job.user_id })
+                    .decrement('quota_used', job.copies || 1);
+            }
             // Invalidate jobs list and stats caches
             await cache.invalidate('jobs:*');
             return result;

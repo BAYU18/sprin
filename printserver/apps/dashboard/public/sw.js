@@ -1,4 +1,4 @@
-const CACHE_NAME = 'printserver-v5';
+const CACHE_NAME = 'printserver-v6';
 const ASSETS_TO_CACHE = [
   '/',
   '/manifest.json',
