@@ -125,6 +125,16 @@ export const settings = {
   update: (data: any) => api.put('/api/settings', data),
   channels: () => api.get('/api/settings/notifications/channels'),
   serverInfo: () => api.get('/api/settings/server-info'),
+  backupList: () => api.get('/api/settings/backup/list'),
+  backupTrigger: () => api.post('/api/settings/backup/trigger'),
+  backupRestore: (filename: string) => api.post('/api/settings/backup/restore', { filename }),
+  // Download returns the file as a blob; responseType:'blob' makes axios
+  // hand back a Buffer/Binary instead of trying to JSON.parse it.
+  backupDownload: (filename: string) => api.get(`/api/settings/backup/download/${encodeURIComponent(filename)}`, { responseType: 'blob' }),
+  // Upload uses XHR for progress; this helper is the JSON endpoint wrapper (no progress)
+  backupUpload: (formData: FormData) => api.post('/api/settings/backup/upload', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  }),
 };
 
 export const paper = {

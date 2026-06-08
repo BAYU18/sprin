@@ -38,11 +38,8 @@ export default function SettingsPage() {
   const fetchBackups = async () => {
     setBackupLoading(true);
     try {
-      const response = await fetch('/api/settings/backup/list');
-      if (response.ok) {
-        const data = await response.json();
-        setBackups(data);
-      }
+      const response = await settingsApi.backupList();
+      setBackups(response.data);
     } catch (err) {
       console.error('Failed to fetch backups list:', err);
     } finally {
@@ -63,19 +60,20 @@ export default function SettingsPage() {
   const handleTriggerBackup = async () => {
     setTriggeringBackup(true);
     try {
-      const response = await fetch('/api/settings/backup/trigger', { method: 'POST' });
-      if (response.ok) {
-        const result = await response.json();
-        setMessage({ type: 'success', text: `Backup generated successfully: ${result.filename}` });
+      const result = await settingsApi.backupTrigger();
+      const data = result.data;
+      if (data?.success) {
+        setMessage({ type: 'success', text: `Backup generated successfully: ${data.filename}` });
         fetchBackups();
       } else {
-        setMessage({ type: 'error', text: 'Failed to generate backup' });
+        setMessage({ type: 'error', text: `Failed to generate backup: ${data?.details || data?.error || 'unknown error'}` });
       }
-    } catch (err) {
-      setMessage({ type: 'error', text: 'Failed to trigger backup' });
+    } catch (err: any) {
+      const apiError = err?.response?.data?.details || err?.response?.data?.error || err?.message || 'unknown error';
+      setMessage({ type: 'error', text: `Failed to trigger backup: ${apiError}` });
     } finally {
       setTriggeringBackup(false);
-      setTimeout(() => setMessage(null), 3000);
+      setTimeout(() => setMessage(null), 5000);
     }
   };
 
@@ -84,19 +82,15 @@ export default function SettingsPage() {
     if (restoreConfirmText.trim().toUpperCase() !== 'RESTORE') return;
     setRestoring(true);
     try {
-      const response = await fetch('/api/settings/backup/restore', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filename: restoreTarget }),
-      });
-      const result = await response.json();
-      if (response.ok && result.success) {
-        setMessage({ type: 'success', text: `Database restored from ${result.filename}.` });
+      const result = await settingsApi.backupRestore(restoreTarget);
+      const data = result.data;
+      if (data?.success) {
+        setMessage({ type: 'success', text: `Database restored from ${data.filename}.` });
         setRestoreTarget(null);
         setRestoreConfirmText('');
         fetchBackups();
       } else {
-        setMessage({ type: 'error', text: `Restore failed: ${result.details || result.error || 'unknown error'}` });
+        setMessage({ type: 'error', text: `Restore failed: ${data?.details || data?.error || 'unknown error'}` });
       }
     } catch (err: any) {
       setMessage({ type: 'error', text: `Restore failed: ${err?.message || 'network error'}` });
@@ -131,10 +125,14 @@ export default function SettingsPage() {
       const formData = new FormData();
       formData.append('file', file);
 
-      // Use XHR for upload progress
+      // Use XHR for upload progress; attach JWT manually since fetch/XHR
+      // don't auto-inject the Authorization header (axios interceptor only
+      // runs on axios instances, not raw XHR).
+      const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
       const result = await new Promise<any>((resolve, reject) => {
         const xhr = new XMLHttpRequest();
         xhr.open('POST', '/api/settings/backup/upload');
+        if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
         xhr.upload.onprogress = (e) => {
           if (e.lengthComputable) {
             setUploadProgress(Math.round((e.loaded / e.total) * 100));
@@ -160,6 +158,28 @@ export default function SettingsPage() {
     } finally {
       setUploading(false);
       setUploadProgress(0);
+      setTimeout(() => setMessage(null), 5000);
+    }
+  };
+
+  // Programmatic download: <a href> can't set Authorization header, so we
+  // fetch the file as a blob via axios (token auto-injected), wrap it in an
+  // object URL, and trigger a hidden anchor click.
+  const handleDownloadBackup = async (filename: string) => {
+    try {
+      const response = await settingsApi.backupDownload(filename);
+      const blob = new Blob([response.data as BlobPart], { type: 'application/gzip' });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
+    } catch (err: any) {
+      const apiError = err?.response?.data?.error || err?.message || 'unknown error';
+      setMessage({ type: 'error', text: `Download gagal: ${apiError}` });
       setTimeout(() => setMessage(null), 5000);
     }
   };
@@ -598,21 +618,20 @@ export default function SettingsPage() {
                                 <td style={{ padding: '10px 12px', color: 'var(--text-muted)' }}>{new Date(b.createdAt).toLocaleString('id-ID')}</td>
                                 <td style={{ padding: '10px 12px', textAlign: 'center' }}>
                                   <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', justifyContent: 'center' }}>
-                                    <a
-                                      href={`/api/settings/backup/download/${b.filename}`}
-                                      download
+                                    <button
+                                      onClick={() => handleDownloadBackup(b.filename)}
                                       title={`Download ${b.filename}`}
                                       style={{
                                         display: 'inline-flex', alignItems: 'center', gap: '5px',
                                         padding: '6px 12px',
                                         color: '#000', background: 'var(--accent-green)', border: '1px solid var(--accent-green)',
                                         textDecoration: 'none', fontWeight: 700, fontSize: '12px',
-                                        borderRadius: '5px', whiteSpace: 'nowrap',
+                                        borderRadius: '5px', whiteSpace: 'nowrap', cursor: 'pointer',
                                         boxShadow: '0 0 8px rgba(0,255,136,0.25)',
                                       }}
                                     >
                                       <Download size={13} /> Download
-                                    </a>
+                                    </button>
                                     <button
                                       onClick={() => setRestoreTarget(b.filename)}
                                       title={`Restore from ${b.filename}`}
@@ -637,7 +656,7 @@ export default function SettingsPage() {
                     </div>
 
                     {/* Mobile: stacked cards with full-width action buttons */}
-                    <div className="mobile-only" style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    <div className="mobile-only" style={{ flexDirection: 'column', gap: '10px' }}>
                       {backups.map((b) => (
                         <div key={b.filename} style={{
                           border: '1px solid var(--border)', borderRadius: '10px',
@@ -655,19 +674,18 @@ export default function SettingsPage() {
                             <span style={{ color: 'var(--text-muted)' }}>{new Date(b.createdAt).toLocaleString('id-ID')}</span>
                           </div>
                           <div style={{ display: 'flex', gap: '8px', marginTop: '4px' }}>
-                            <a
-                              href={`/api/settings/backup/download/${b.filename}`}
-                              download
+                            <button
+                              onClick={() => handleDownloadBackup(b.filename)}
                               style={{
                                 flex: 1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '6px',
                                 padding: '10px 12px', minHeight: '44px',
                                 color: '#000', background: 'var(--accent-green)', border: '1px solid var(--accent-green)',
                                 textDecoration: 'none', fontWeight: 700, fontSize: '13px', borderRadius: '6px',
-                                boxShadow: '0 0 8px rgba(0,255,136,0.25)',
+                                cursor: 'pointer', boxShadow: '0 0 8px rgba(0,255,136,0.25)',
                               }}
                             >
                               <Download size={15} /> Download
-                            </a>
+                            </button>
                             <button
                               onClick={() => setRestoreTarget(b.filename)}
                               style={{

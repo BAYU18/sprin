@@ -22,15 +22,28 @@ import { cache } from '../utils/cache.js';
 
 // Paths that do NOT require JWT authentication
 const PUBLIC_PATHS = [
-    '/api/auth/',        // Auth routes are public (login/register/refresh/logout)
-    '/api/health',       // Health check endpoints
+    '/api/auth/',                  // Auth routes are public (login/register/refresh/logout)
+    '/api/health',                 // Health check endpoints
     '/api/health/db',
     '/api/health/cache',
-    '/api/queues/stats', // Queue stats are read-only monitoring info
+    '/api/queues/stats',           // Queue stats are read-only monitoring info
+];
+
+// Regex patterns for path matching (used for routes with path params).
+// Windows client agent endpoints — agents can't get a JWT before they
+// register (catch-22), so they authenticate via X-Node-Secret header
+// verified inside each handler. See clients.ts:register + heartbeat.
+const PUBLIC_PATH_REGEX: RegExp[] = [
+    /^\/api\/clients\/register\/?$/,
+    /^\/api\/clients\/[^/]+\/heartbeat\/?$/,    // /api/clients/:id/heartbeat
 ];
 
 function isPublicPath(path: string): boolean {
-    return PUBLIC_PATHS.some(p => path.startsWith(p));
+    // Strip query string for matching
+    const pathname = path.split('?')[0];
+    if (PUBLIC_PATHS.some(p => pathname.startsWith(p))) return true;
+    if (PUBLIC_PATH_REGEX.some(re => re.test(pathname))) return true;
+    return false;
 }
 
 // JWT verification hook — rejects unauthenticated requests to protected routes

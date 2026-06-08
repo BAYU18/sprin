@@ -70,14 +70,14 @@ export default function ClientsPage() {
   }
 
   const getClientIcon = (platform: string = '') => {
-    const plat = platform.toLowerCase();
+    const plat = (platform || '').toLowerCase();
     if (plat.includes('win') || plat.includes('microsoft')) return <Cpu size={18} />;
     return <Server size={18} />;
   };
 
   // Convert "win32 10.0.19045" or "Windows 10 (10.0.19045)" → friendly badge.
   const formatOsLabel = (os: string = ''): string => {
-    const o = os.toLowerCase();
+    const o = (os || '').toLowerCase();
     if (o.includes('windows 11')) return 'Windows 11';
     if (o.includes('windows 10')) return 'Windows 10';
     if (o.includes('windows 8.1')) return 'Windows 8.1';
@@ -91,7 +91,7 @@ export default function ClientsPage() {
   // Detect link-local IPv6 / IPv4-mapped / loopback — anything useless for LAN.
   const isUnroutableAddress = (ip: string = ''): boolean => {
     if (!ip) return true;
-    const l = ip.toLowerCase().trim();
+    const l = (ip || '').toLowerCase().trim();
     if (l === '::1' || l.startsWith('fe80:') || l.startsWith('fec0:') ||
         l.startsWith('::ffff:127.') || l === '127.0.0.1') return true;
     return false;

@@ -26,6 +26,7 @@ const heartbeatSchema = z.object({
     status: z.enum(['online', 'offline']).optional(),
     printers: z.array(z.object({
         name: z.string(),
+        port: z.string().optional(),  // Port name (USB001, LPT1, network share path)
         status: z.string().optional(),
         jobs_in_queue: z.number().int().nonnegative().optional()
     })).optional(),
@@ -81,7 +82,14 @@ export async function setupClientsRoutes(fastify: FastifyInstance) {
                 client_version: clientVersion,
             };
 
-            if (secretKey && secretKey !== process.env.CLIENT_SECRET) {
+            // Shared-secret auth: only accept requests with the configured
+            // CLIENT_SECRET (or NODE_SECRET as a fallback). This replaces JWT
+            // for agent endpoints because agents can't get a JWT before they
+            // register (catch-22). Set CLIENT_SECRET in .env — the same value
+            // must be configured in the Windows agent installer.
+            const expectedSecret = process.env.CLIENT_SECRET || process.env.NODE_SECRET;
+            const providedSecret = secretKey || request.headers['x-node-secret'];
+            if (expectedSecret && providedSecret && providedSecret !== expectedSecret) {
                 return reply.status(401).send({ error: 'Invalid secret key' });
             }
 
@@ -117,7 +125,13 @@ export async function setupClientsRoutes(fastify: FastifyInstance) {
 
             fastify.io?.emit('client:online', { clientId: client.id, hostname: client.hostname });
 
-            return client;
+            // Return the per-client secret too so the agent can use it for
+            // subsequent calls (X-Node-Secret header). Aliases both `nodeSecret`
+            // (what the agent already reads) and `secret_key` (DB column name).
+            return {
+                ...client,
+                nodeSecret: client.secret_key
+            };
         } catch (error) {
             logger.error('[Clients] Registration error:', error);
             return reply.status(500).send({ error: 'Registration failed' });
@@ -126,6 +140,19 @@ export async function setupClientsRoutes(fastify: FastifyInstance) {
 
     fastify.post('/:id/heartbeat', async (request, reply) => {
         const { id } = request.params as { id: string };
+
+        // Shared-secret check: only accept the per-client secret OR the global
+        // CLIENT_SECRET. Agents use their own nodeSecret (returned from /register)
+        // so the server can attribute heartbeats to a specific client.
+        const expectedGlobal = process.env.CLIENT_SECRET || process.env.NODE_SECRET;
+        const providedSecret = request.headers['x-node-secret'];
+        if (expectedGlobal && providedSecret && providedSecret !== expectedGlobal) {
+            // Not the global secret — try to match against the per-client one.
+            const clientRow = await fastify.knex('clients').where({ id }).first();
+            if (!clientRow || clientRow.secret_key !== providedSecret) {
+                return reply.status(401).send({ error: 'Invalid X-Node-Secret' });
+            }
+        }
 
         let body: z.infer<typeof heartbeatSchema>;
         try {
@@ -149,31 +176,59 @@ export async function setupClientsRoutes(fastify: FastifyInstance) {
 
         // Sync printer list from agent heartbeat
         if (Array.isArray(printers)) {
+            // Network-share printer names look like:
+            //   \\HOST\Printer Name
+            //   //HOST/Printer Name
+            //   smb://host/...
+            // The Windows agent used to send these as "physical" printers when
+            // it skipped the USB-only filter, which polluted the dashboard
+            // with ghost network shares. Filter them out server-side as a
+            // safety net — defense in depth.
             const BUILTIN_PATTERNS = [
-                /^[\\/]{2}.*/i,
+                /^[\\/]{2}[^\\/].*/i,            // \\HOST\share or //HOST/share
+                /^smb:/i,                         // smb://...
+                /^http(s)?:\/\/[^/]+\/printers/i, // IPP/HTTP URL
                 /microsoft print to pdf/i,
                 /microsoft xps document writer/i,
                 /onenote/i,
                 /^fax$/i,
-                /nitro pdf creator/i
+                /nitro pdf creator/i,
+                /oneoff|redirected/i,             // "Redirected" pseudo-printer
             ];
 
-            const isFiltered = (name) => {
-                if (!name || typeof name !== 'string') return true;
-                return BUILTIN_PATTERNS.some(re => re.test(name.trim()));
+            const isFiltered = (printer: any) => {
+                if (typeof printer === 'string') {
+                    // Legacy format: just a string name
+                    return BUILTIN_PATTERNS.some(re => re.test(printer));
+                }
+                if (!printer || typeof printer !== 'object') return true;
+                
+                const name = printer.name || '';
+                const port = printer.port || '';
+                
+                // Check both name and port against network-share patterns
+                return BUILTIN_PATTERNS.some(re => 
+                    re.test(name.trim()) || re.test(port.trim())
+                );
             };
 
-            const printerNames = printers
-                .map((p: any) => (typeof p === 'string' ? p : p?.name))
-                .filter((n: any) => typeof n === 'string' && !isFiltered(n))
-                .map((n: string) => n.trim());
+            // Normalize printers to objects and filter network shares
+            const filteredPrinters = printers
+                .map((p: any) => {
+                    if (typeof p === 'string') return { name: p, port: 'UNKNOWN' };
+                    return { name: p?.name || 'UNKNOWN', port: p?.port || 'UNKNOWN' };
+                })
+                .filter((p: any) => !isFiltered(p));
 
             const seen = new Set<string>();
-            for (const name of printerNames) {
-                const trimmed = name.trim();
-                const key = trimmed.toLowerCase();
+            const processedNames: string[] = [];
+            
+            for (const printer of filteredPrinters) {
+                const trimmedName = printer.name.trim();
+                const key = trimmedName.toLowerCase();
                 if (seen.has(key)) continue;
                 seen.add(key);
+                processedNames.push(trimmedName);
 
                 const existing = await fastify.knex('printers')
                     .where({ client_id: id })
@@ -184,7 +239,7 @@ export async function setupClientsRoutes(fastify: FastifyInstance) {
                     // Backfill slug if missing (older records before slug column was added)
                     const slug = existing.slug || await ensureUniquePrinterSlug(
                         fastify.knex,
-                        generatePrinterSlug(trimmed),
+                        generatePrinterSlug(trimmedName),
                         existing.id
                     );
 
@@ -199,6 +254,7 @@ export async function setupClientsRoutes(fastify: FastifyInstance) {
                     }
 
                     const updatePayload: any = {
+                        port: printer.port,
                         status: status === 'online' ? 'online' : 'offline',
                         slug,
                         updated_at: new Date()
@@ -213,19 +269,19 @@ export async function setupClientsRoutes(fastify: FastifyInstance) {
                         .update(updatePayload);
 
                     if (wasRemoved) {
-                        logger.info(`[Heartbeat] Restored auto-removed printer "${trimmed}" (id=${existing.id}) — node back online`);
+                        logger.info(`[Heartbeat] Restored auto-removed printer "${trimmedName}" (id=${existing.id}) — node back online`);
                     }
                 } else {
                     // Auto-generate unique slug for new printer
                     const slug = await ensureUniquePrinterSlug(
                         fastify.knex,
-                        generatePrinterSlug(trimmed)
+                        generatePrinterSlug(trimmedName)
                     );
                     await fastify.knex('printers')
                         .insert({
-                            name: trimmed,
+                            name: trimmedName,
                             driver: 'Unknown',
-                            port: 'NODE',
+                            port: printer.port || 'NODE',
                             type: 'network',
                             is_shared: true,
                             status: status === 'online' ? 'online' : 'offline',
@@ -236,6 +292,8 @@ export async function setupClientsRoutes(fastify: FastifyInstance) {
                         });
                 }
             }
+
+            const printerNames = processedNames;
 
             // Mark printers no longer reported as offline
             await fastify.knex('printers')
