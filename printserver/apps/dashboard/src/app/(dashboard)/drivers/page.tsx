@@ -146,7 +146,7 @@ export default function DriversPage() {
     };
 
     const filtered = drivers.filter(d =>
-        d.name.toLowerCase().includes(filter.toLowerCase()) ||
+        (d.name || '').toLowerCase().includes(filter.toLowerCase()) ||
         (d.manufacturer || '').toLowerCase().includes(filter.toLowerCase())
     );
 

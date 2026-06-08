@@ -119,10 +119,9 @@ export default function PrintersPage() {
 
   const fetchHiddenCount = async () => {
     try {
-      const resp = await fetch('/api/printers/removed', { credentials: 'include' });
-      if (resp.ok) {
-        const data = await resp.json();
-        setHiddenCount(data.count || 0);
+      const resp = await printersApi.removed();
+      if (resp?.data) {
+        setHiddenCount(resp.data.count || 0);
       }
     } catch (e) { /* silent */ }
   };

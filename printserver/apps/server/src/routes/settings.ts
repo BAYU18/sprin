@@ -201,7 +201,10 @@ export async function setupSettingsRoutes(fastify: FastifyInstance) {
         return {
             name: process.env.SERVER_NAME || 'PrintServer Pro',
             ip: process.env.SERVER_IP || '127.0.0.1',
-            port: parseInt(process.env.IPP_PORT || '631', 10)
+            // Agents register + heartbeat against the API port (PORT=3000),
+            // NOT the IPP port (631). The Connect Agent page builds the agent's
+            // server URL from this value, so it must be the API port.
+            port: parseInt(process.env.PORT || '3000', 10)
         };
     });
 

@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { settings } from '@/lib/api';
+import { settings, nodes as nodesApi } from '@/lib/api';
 import {
   Bot,
   Download,
@@ -108,7 +108,10 @@ export default function ConnectAgentPage() {
 
   const fetchAgentInfo = async () => {
     try {
-      const response = await fetch('/api/downloads/agent/info');
+      // The downloads routes are registered WITHOUT the /api prefix and are
+      // public (the agent .exe must be fetchable before auth). Path is
+      // /downloads/agent/info — NOT /api/downloads/... (that 404s).
+      const response = await fetch('/downloads/agent/info');
       if (response.ok) {
         const data = await response.json();
         setAgentInfo(data);
@@ -122,9 +125,9 @@ export default function ConnectAgentPage() {
 
   const fetchNodes = async () => {
     try {
-      const response = await fetch('/api/nodes');
-      if (response.ok) {
-        const data: NodesResponse = await response.json();
+      const response = await nodesApi.list();
+      if (response?.data) {
+        const data: NodesResponse = response.data;
         setNodes(data.nodes || []);
         setNodesTotal(data.total || 0);
       }
@@ -337,7 +340,7 @@ export default function ConnectAgentPage() {
                 </div>
                 
                 <a
-                  href="/api/downloads/agent"
+                  href="/downloads/agent"
                   download
                   className="btn-primary"
                   style={{

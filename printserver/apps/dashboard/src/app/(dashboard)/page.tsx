@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useRef } from 'react';
-import { jobs as jobsApi, printers, clients } from '@/lib/api';
+import { jobs as jobsApi, printers, clients, analytics as analyticsApi } from '@/lib/api';
 import { on, off } from '@/hooks/useSocket';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell,
@@ -749,7 +749,7 @@ export default function DashboardPage() {
         printers.list(),
         clients.list(),
         jobsApi.stats.today(),
-        fetch('/api/stats?range=7d').catch(() => ({ ok: false, json: () => ({ jobs: [] }) })),
+        analyticsApi.volume(7).catch(() => ({ data: [] })),
       ]);
 
       setPrinterList(printersRes.data || []);
@@ -760,10 +760,8 @@ export default function DashboardPage() {
       const jobsArr = Array.isArray(todayData.jobs) ? todayData.jobs : [];
       setTodayJobs(jobsArr);
 
-      if (volumeRes.ok) {
-        const vd = await volumeRes.json();
-        setVolumeData(vd.jobs || []);
-      }
+      // /api/analytics/volume returns an array [{date, jobs, pages}], not {jobs:[...]}
+      setVolumeData(Array.isArray(volumeRes.data) ? volumeRes.data : []);
     } catch (err) {
       console.error('Dashboard fetch error:', err);
     } finally {

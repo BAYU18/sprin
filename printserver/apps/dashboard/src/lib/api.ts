@@ -60,6 +60,7 @@ export const auth = {
 
 export const printers = {
   list: () => api.get('/api/printers'),
+  removed: () => api.get('/api/printers/removed'),
   get: (id: number) => api.get(`/api/printers/${id}`),
   create: (data: any) => api.post('/api/printers', data),
   update: (id: number, data: any) => api.put(`/api/printers/${id}`, data),
