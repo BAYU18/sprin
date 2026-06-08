@@ -83,6 +83,11 @@ export const jobs = {
     today: () => api.get('/api/jobs/stats/today'),
     week: () => api.get('/api/jobs/stats/week'),
   },
+  deadLetter: {
+    list: (params?: any) => api.get('/api/jobs/dead-letter', { params }),
+    requeue: (jobIds?: string[]) => api.post('/api/jobs/dead-letter/requeue', { jobIds }),
+    discard: (jobIds?: string[]) => api.post('/api/jobs/dead-letter/discard', { jobIds }),
+  },
 };
 
 export const clients = {

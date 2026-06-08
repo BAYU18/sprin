@@ -237,6 +237,134 @@ export async function setupJobsRoutes(fastify: FastifyInstance) {
         return { success: true };
     });
 
+    // ─── Dead-Letter Queue (DLQ) ──────────────────────────────────────────
+    // Jobs that exhausted all auto-retries + failover end up status='failed'.
+    // These endpoints give a central place to inspect, bulk-requeue, or discard
+    // them so a stuck job never gets silently lost.
+
+    // List permanently-failed jobs with their retry audit trail
+    fastify.get('/dead-letter', async (request, reply) => {
+        const q = z.object({
+            page: z.coerce.number().default(1),
+            limit: z.coerce.number().default(50),
+        }).parse(request.query);
+        const offset = (q.page - 1) * q.limit;
+
+        const baseQuery = fastify.knex('print_jobs')
+            .where('print_jobs.status', 'failed');
+
+        const [{ count }] = await baseQuery.clone().count({ count: '*' });
+
+        const jobs = await baseQuery.clone()
+            .leftJoin('printers', 'print_jobs.printer_id', 'printers.id')
+            .leftJoin('users', 'print_jobs.user_id', 'users.id')
+            .select(
+                'print_jobs.id',
+                'print_jobs.job_id',
+                'print_jobs.file_name',
+                'print_jobs.status',
+                'print_jobs.attempts',
+                'print_jobs.error_message',
+                'print_jobs.copies',
+                'print_jobs.created_at',
+                'print_jobs.updated_at',
+                'printers.name as printer_name',
+                'users.username as user_name'
+            )
+            .orderBy('print_jobs.updated_at', 'desc')
+            .limit(q.limit)
+            .offset(offset);
+
+        // Attach the retry history for each job (best-effort — table may be empty)
+        const ids = jobs.map((j: any) => j.id);
+        let retriesByJob: Record<number, any[]> = {};
+        if (ids.length > 0) {
+            const retries = await fastify.knex('retries')
+                .whereIn('print_job_id', ids)
+                .select('print_job_id', 'attempt_number', 'status', 'error_message', 'created_at')
+                .orderBy('attempt_number', 'asc')
+                .catch(() => []);
+            for (const r of retries) {
+                (retriesByJob[r.print_job_id] ||= []).push(r);
+            }
+        }
+        const jobsWithRetries = jobs.map((j: any) => ({ ...j, retries: retriesByJob[j.id] || [] }));
+
+        return {
+            jobs: jobsWithRetries,
+            total: Number(count),
+            page: q.page,
+            limit: q.limit,
+        };
+    });
+
+    // Bulk requeue: reset failed jobs back to 'queued' and re-add to the print queue.
+    // Pass { jobIds: ["abc","def"] } to target specific jobs, or omit to requeue ALL failed.
+    fastify.post('/dead-letter/requeue', async (request, reply) => {
+        const body = z.object({
+            jobIds: z.array(z.string()).optional(),
+        }).parse(request.body || {});
+
+        let query = fastify.knex('print_jobs').where({ status: 'failed' });
+        if (body.jobIds && body.jobIds.length > 0) {
+            query = query.whereIn('job_id', body.jobIds);
+        }
+        const failedJobs = await query.select(
+            'id', 'job_id', 'printer_id', 'file_path', 'copies'
+        );
+
+        if (failedJobs.length === 0) {
+            return { success: true, requeued: 0, message: 'No failed jobs to requeue' };
+        }
+
+        const { addPrintJob } = await import('../queues/index.js');
+        let requeued = 0;
+        for (const job of failedJobs) {
+            await fastify.knex('print_jobs')
+                .where({ id: job.id })
+                .update({ status: 'queued', attempts: 0, error_message: null, updated_at: new Date() });
+
+            await addPrintJob({
+                jobId: job.id,
+                printerId: job.printer_id,
+                filePath: job.file_path,
+                copies: job.copies,
+                options: {}
+            });
+            fastify.io?.emit('job:retry', { jobId: job.job_id });
+            requeued++;
+        }
+
+        await cache.invalidate('jobs:*');
+        fastify.io?.emit('deadletter:changed', { requeued });
+
+        return { success: true, requeued };
+    });
+
+    // Discard (purge) failed jobs from the dead-letter view by marking them cancelled.
+    // Pass { jobIds: [...] } to target specific jobs, or omit to discard ALL failed.
+    fastify.post('/dead-letter/discard', async (request, reply) => {
+        const body = z.object({
+            jobIds: z.array(z.string()).optional(),
+        }).parse(request.body || {});
+
+        let query = fastify.knex('print_jobs').where({ status: 'failed' });
+        if (body.jobIds && body.jobIds.length > 0) {
+            query = query.whereIn('job_id', body.jobIds);
+        }
+
+        const discarded = await query.update({
+            status: 'cancelled',
+            error_message: fastify.knex.raw("COALESCE(error_message, '') || ' [discarded from dead-letter]'"),
+            updated_at: new Date()
+        });
+
+        await cache.invalidate('jobs:*');
+        fastify.io?.emit('deadletter:changed', { discarded });
+
+        return { success: true, discarded };
+    });
+
     fastify.get('/stats/today', async (request, reply) => {
         return await cache.getOrSet('jobs:stats:today', 30, async () => {
             const today = new Date();

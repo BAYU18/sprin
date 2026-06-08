@@ -22,7 +22,7 @@ export interface JobOptions {
     paperSize?: string;
 }
 
-const MAGIC_BYTES: Record<string, { bytes: number[]; offset: number; mime: string }> = {
+const MAGIC_BYTES: Record<string, { bytes: number[]; offset: number }> = {
     'application/pdf': { bytes: [0x25, 0x50, 0x44, 0x46], offset: 0 },
     'image/urf': { bytes: [0x55, 0x52, 0x46, 0x57], offset: 0 },
     'image/pwg-raster': { bytes: [0x55, 0x53, 0x54, 0x4F], offset: 0 },
