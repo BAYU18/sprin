@@ -869,18 +869,16 @@ export default function DashboardPage() {
           subtext={<><span style={{ color: 'var(--accent-green)' }}>{onlinePrinters}</span> of {totalPrinters} online</>}
           index={0}
         />
-        <Link href="/clients" style={{ textDecoration: 'none', display: 'block' }}>
-          <StatCard
-            icon={<ServerIcon />}
-            badge={activeClients > 0 ? 'Online' : 'Offline'}
-            badgeColor={activeClients > 0 ? 'green' : 'amber'}
-            value={activeClients}
-            total={totalClients}
-            label="Active Server Nodes"
-            subtext={<><span style={{ color: activeClients > 0 ? 'var(--accent-green)' : 'var(--accent-amber)' }}>{activeClients}</span> of {totalClients} online</>}
-            index={1}
-          />
-        </Link>
+        <StatCard
+          icon={<ServerIcon />}
+          badge={activeClients > 0 ? 'Online' : 'Offline'}
+          badgeColor={activeClients > 0 ? 'green' : 'amber'}
+          value={activeClients}
+          total={totalClients}
+          label="Active Server Nodes"
+          subtext={<><span style={{ color: activeClients > 0 ? 'var(--accent-green)' : 'var(--accent-amber)' }}>{activeClients}</span> of {totalClients} online</>}
+          index={1}
+        />
         <StatCard
           icon={<DocumentIcon />}
           badge="Today"

@@ -115,14 +115,6 @@ export default function Sidebar({ isOpen = false, onClose }: SidebarProps) {
         : undefined,
     },
     {
-      href: '/clients',
-      icon: 'monitor',
-      label: 'Clients',
-      badge: counts.clients_total > 0
-        ? { value: counts.clients_online, tone: counts.clients_online > 0 ? 'ok' : 'mute' }
-        : undefined,
-    },
-    {
       href: '/jobs',
       icon: 'file',
       label: 'Job Queue',
