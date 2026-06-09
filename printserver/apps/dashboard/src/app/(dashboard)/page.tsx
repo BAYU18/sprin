@@ -424,7 +424,10 @@ function NetworkTopology({ printers: printerList }: { printers: any[]; clients: 
 
   const renderBox = (p: any, isOnline: boolean) => {
     const isFlashing = recentlyChanged.indexOf(p.id) !== -1;
-    const ippUri = `ipp://192.168.1.141:631/printers/${p.slug || ''}`;
+    // Derive IPP host from the page origin so the copied URI is correct on any
+    // server IP/hostname — never hardcode. Dashboard and IPP share the same host.
+    const ippHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
+    const ippUri = `ipp://${ippHost}:631/printers/${p.slug || ''}`;
     return (
       <div
         key={p.id}

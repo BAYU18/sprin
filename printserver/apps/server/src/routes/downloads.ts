@@ -24,6 +24,37 @@ function getAgentVersion(): string {
 }
 
 export async function setupDownloadsRoutes(fastify: FastifyInstance) {
+    // Derive the server's API base URL (http://<host>:3000) from the incoming
+    // request, so downloaded .bat installers always point at the IP/hostname the
+    // user actually reached us on — never a hardcoded IP that breaks when the
+    // server moves. Falls back to env SERVER_IP, then localhost.
+    const deriveApiBase = (request: FastifyRequest): string => {
+        const hostHeader = (request.headers['x-forwarded-host'] as string) || request.headers.host || '';
+        // strip any port the browser used (dashboard :3001) — agents talk to API :3000
+        const host = hostHeader.split(':')[0] || process.env.SERVER_IP || 'localhost';
+        return `http://${host}:3000`;
+    };
+
+    // Serve a .bat/.ps1 from disk with the hardcoded server URL rewritten to the
+    // request-derived API base. Keeps the on-disk file as a template.
+    const serveScriptDynamic = (
+        diskPath: string,
+        downloadName: string,
+        contentType = 'application/x-msdos-program'
+    ) => async (request: FastifyRequest, reply: FastifyReply) => {
+        if (!fs.existsSync(diskPath)) {
+            return reply.status(404).send({ error: `${downloadName} not found` });
+        }
+        const apiBase = deriveApiBase(request);
+        const raw = fs.readFileSync(diskPath, 'utf8');
+        // Replace any hardcoded http://<ip-or-host>:3000 with the live API base.
+        const body = raw.replace(/http:\/\/[0-9A-Za-z.\-]+:3000/g, apiBase);
+        reply
+            .header('Content-Type', contentType)
+            .header('Content-Disposition', `attachment; filename="${downloadName}"`)
+            .send(body);
+    };
+
     fastify.get('/downloads/agent', async (request: FastifyRequest, reply: FastifyReply) => {
         if (!fs.existsSync(CLIENT_AGENT_PATH)) {
             fastify.log.error(`Agent not found at: ${CLIENT_AGENT_PATH}`);
@@ -64,50 +95,38 @@ export async function setupDownloadsRoutes(fastify: FastifyInstance) {
     });
 
     const AGENT_INSTALLER_PATH = '/root/serverbot/print/printserver/apps/server/public/downloads/install-agent.bat';
-    fastify.get('/downloads/install-agent.bat', async (request: FastifyRequest, reply: FastifyReply) => {
-        if (!fs.existsSync(AGENT_INSTALLER_PATH)) {
-            return reply.status(404).send({ error: 'Installer script not found' });
-        }
-        const stat = fs.statSync(AGENT_INSTALLER_PATH);
-        const fileBuffer = fs.readFileSync(AGENT_INSTALLER_PATH);
-        reply
-            .header('Content-Type', 'application/x-msdos-program')
-            .header('Content-Disposition', 'attachment; filename="Install-PrintServer-Agent.bat"')
-            .header('Content-Length', stat.size)
-            .send(fileBuffer);
-    });
+    fastify.get('/downloads/install-agent.bat',
+        serveScriptDynamic(AGENT_INSTALLER_PATH, 'Install-PrintServer-Agent.bat'));
 
     // Node Agent Manager — local management menu (status/start/stop/restart/uninstall)
     const AGENT_MANAGER_PATH = '/root/serverbot/print/printserver/apps/server/public/downloads/manage-agent.bat';
-    fastify.get('/downloads/manage-agent.bat', async (request: FastifyRequest, reply: FastifyReply) => {
-        if (!fs.existsSync(AGENT_MANAGER_PATH)) {
-            return reply.status(404).send({ error: 'Manager script not found' });
-        }
-        const stat = fs.statSync(AGENT_MANAGER_PATH);
-        const fileBuffer = fs.readFileSync(AGENT_MANAGER_PATH);
-        reply
-            .header('Content-Type', 'application/x-msdos-program')
-            .header('Content-Disposition', 'attachment; filename="Manage-PrintServer-Agent.bat"')
-            .header('Content-Length', stat.size)
-            .send(fileBuffer);
-    });
+    fastify.get('/downloads/manage-agent.bat',
+        serveScriptDynamic(AGENT_MANAGER_PATH, 'Manage-PrintServer-Agent.bat'));
 
     // PowerShell script to bulk-add all printers from server
     const PS_SCRIPT_PATH = '/root/serverbot/print/printserver/docs/add-all-printers.ps1';
     const SNIPPETS_PATH = '/root/serverbot/print/printserver/docs/printer-snippets.txt';
     const PS_UNIVERSAL_PATH = '/root/serverbot/print/printserver/docs/quick-add-universal.ps1';
 
-    const serveScript = (path: string, filename: string) => async (request: FastifyRequest, reply: FastifyReply) => {
-        if (!fs.existsSync(path)) {
+    const serveScript = (filePath: string, filename: string) => async (request: FastifyRequest, reply: FastifyReply) => {
+        if (!fs.existsSync(filePath)) {
             return reply.status(404).send({ error: 'File not found' });
         }
-        const stat = fs.statSync(path);
-        const fileBuffer = fs.readFileSync(path);
+        const host = deriveApiBase(request).replace(/^https?:\/\//, '').split(':')[0];
+        const raw = fs.readFileSync(filePath, 'utf8');
+        // Rewrite hardcoded host references so the script targets the live server:
+        //   - http://<host>:3000  → API base
+        //   - $serverHost = "..." → PowerShell host var
+        //   - "Server: <ip>:631"  → comment header
+        const body = raw
+            .replace(/http:\/\/[0-9A-Za-z.\-]+:3000/g, `http://${host}:3000`)
+            .replace(/(\$server(?:Host)?\s*=\s*)"[^"]*"/g, `$1"${host}"`)
+            .replace(/([0-9]{1,3}(?:\.[0-9]{1,3}){3}):631/g, `${host}:631`)
+            .replace(/([0-9]{1,3}(?:\.[0-9]{1,3}){3}):3000/g, `${host}:3000`);
         reply
             .header('Content-Type', 'application/octet-stream')
             .header('Content-Disposition', `attachment; filename="${filename}"`)
-            .header('Content-Length', stat.size)
-            .send(fileBuffer);
+            .send(body);
     };
 
     fastify.get('/downloads/add-printers.ps1', serveScript(PS_SCRIPT_PATH, 'add-all-printers.ps1'));
@@ -117,21 +136,8 @@ export async function setupDownloadsRoutes(fastify: FastifyInstance) {
     // numbered menu, then installs the chosen printer (auto IPP port + correct
     // driver + verify). Served straight from disk like the other .bat files.
     const ADD_PRINTER_BAT = path.join(__dirname, '..', '..', 'public', 'downloads', 'add-printer.bat');
-    fastify.get('/downloads/add-printer.bat', async (request: FastifyRequest, reply: FastifyReply) => {
-        const p = fs.existsSync(ADD_PRINTER_BAT)
-            ? ADD_PRINTER_BAT
-            : '/root/serverbot/print/printserver/apps/server/public/downloads/add-printer.bat';
-        if (!fs.existsSync(p)) {
-            return reply.status(404).send({ error: 'add-printer.bat not found' });
-        }
-        const stat = fs.statSync(p);
-        const fileBuffer = fs.readFileSync(p);
-        reply
-            .header('Content-Type', 'application/x-msdos-program')
-            .header('Content-Disposition', 'attachment; filename="Add-PrintServer-Printer.bat"')
-            .header('Content-Length', stat.size)
-            .send(fileBuffer);
-    });
+    fastify.get('/downloads/add-printer.bat',
+        serveScriptDynamic(ADD_PRINTER_BAT, 'Add-PrintServer-Printer.bat'));
 
     // Rute Unduhan APK Android
     const ANDROID_APK_PATH = '/root/serverbot/print/printserver/apps/server/public/downloads/printserver.apk';
