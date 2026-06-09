@@ -1,6 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { generatePrinterSlug, ensureUniquePrinterSlug } from '../utils/printer-slug.js';
+import { cache, cacheKeys } from '../utils/cache.js';
 
 const clientSchema = z.object({
     hostname: z.string().optional(),
@@ -389,6 +390,13 @@ export async function setupClientsRoutes(fastify: FastifyInstance) {
                 .where({ client_id: id })
                 .whereNotIn('name', printerNames.map((n: string) => n.trim()))
                 .update({ status: 'offline', updated_at: new Date() });
+
+            // TIER-2 #1 FIX: heartbeat just mutated printer status/slug rows, so the
+            // cached printers list (printers:list:default, 60s TTL) is now stale.
+            // Without this, the dashboard shows offline (red) for up to 60s even
+            // though the node is online — the exact "node RUNNING but printer red"
+            // bug. Invalidate so the next GET /api/printers reloads fresh from DB.
+            await cache.invalidate(cacheKeys.printersList('default'));
         }
 
         if (status === 'online') {

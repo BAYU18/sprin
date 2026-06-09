@@ -680,6 +680,21 @@ export class PrintRouter {
     private async checkAllPrinterHealth(): Promise<void> {
         for (const [printerId, driver] of this.drivers) {
             try {
+                // Node-managed printers (client_id set) are physically attached to
+                // a remote Windows node (e.g. USB001 on IT-99). The central server
+                // can't reach them directly, so driver.healthCheck() always returns
+                // false here and would wrongly flip them offline — fighting the
+                // node's heartbeat and causing the "node RUNNING but printer red"
+                // flapping bug. Their status is owned by the heartbeat handler in
+                // clients.ts; skip them in this local loop.
+                const ownerRow = await this.fastify.knex('printers')
+                    .where({ id: printerId })
+                    .select('client_id')
+                    .first();
+                if (ownerRow?.client_id) {
+                    continue;
+                }
+
                 const isHealthy = await driver.healthCheck();
                 const status = await driver.getStatus();
 
