@@ -114,12 +114,12 @@ export default function DriversPage() {
     };
 
     const handleAutoAssign = async () => {
-        if (!confirm('Auto-assign drivers to unassigned printers based on name match?')) return;
+        if (!confirm('Auto-assign drivers to unassigned printers based on smart name match?')) return;
         try {
-            const result = (await driversApi.autoAssign('name-contains')).data;
-            setSuccess(`Auto-assigned ${result.assigned} of ${result.total} printers`);
+            const result = (await driversApi.autoAssign({ reassign: false })).data;
+            setSuccess(`Auto-assigned ${result.assigned} driver(s) — ${result.matched} matched, ${result.unmatched} unmatched of ${result.total}`);
             loadData();
-            setTimeout(() => setSuccess(null), 3000);
+            setTimeout(() => setSuccess(null), 4000);
         } catch (e: any) {
             setError(e.response?.data?.error || e.message || 'Failed to auto-assign');
         }

@@ -1,13 +1,13 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { printers as printersApi, paper as paperApi } from '@/lib/api';
+import { printers as printersApi, paper as paperApi, drivers as driversApi } from '@/lib/api';
 import api from '@/lib/api';
 import { on, off } from '@/hooks/useSocket';
 import {
   Printer, Plus, RefreshCw, CheckCircle, XCircle,
   AlertTriangle, MoreVertical, Trash2, Edit, FileText, Eye, EyeOff, ChevronDown,
-  Play, Ban, Filter, Tag, Folder, Search, X, Monitor
+  Play, Ban, Filter, Tag, Folder, Search, X, Monitor, Sparkles
 } from 'lucide-react';
 import Link from 'next/link';
 import AddPrinterModal from '@/components/AddPrinterModal';
@@ -34,6 +34,9 @@ export default function PrintersPage() {
   const [showHidden, setShowHidden] = useState(false);
   const [hiddenCount, setHiddenCount] = useState(0);
   const [showAddModal, setShowAddModal] = useState(false);
+  // Smart driver auto-detect
+  const [autoDetecting, setAutoDetecting] = useState(false);
+  const [autoDetectResult, setAutoDetectResult] = useState<any | null>(null);
   // Per-printer paper config modal (full: size + orientation + tray + custom)
   const [paperConfigPrinter, setPaperConfigPrinter] = useState<{ id: number; name: string } | null>(null);
   const [paperSizes, setPaperSizes] = useState<PaperSize[]>([]);
@@ -116,6 +119,48 @@ export default function PrintersPage() {
         setHiddenCount(resp.data.count || 0);
       }
     } catch (e) { /* silent */ }
+  };
+
+  // Smart driver auto-detect: previews matches (dry-run), then applies if any
+  // changes are found. Re-evaluates all printers (including already-assigned).
+  const handleAutoDetect = async () => {
+    setAutoDetecting(true);
+    setAutoDetectResult(null);
+    try {
+      // 1) Dry-run to compute matches without writing.
+      const preview = await driversApi.autoAssign({ dry_run: true, reassign: true });
+      const toChange = (preview.data?.results || []).filter((r: any) => r.matched && r.changed);
+
+      if (toChange.length === 0) {
+        const matched = preview.data?.matched || 0;
+        setAutoDetectResult({
+          ok: true,
+          applied: 0,
+          message: matched > 0
+            ? `All ${matched} matched printer(s) already have the correct driver.`
+            : 'No confident driver matches found for unassigned printers.',
+        });
+        return;
+      }
+
+      // 2) Apply for real.
+      const applied = await driversApi.autoAssign({ dry_run: false, reassign: true });
+      setAutoDetectResult({
+        ok: true,
+        applied: applied.data?.assigned || 0,
+        unmatched: applied.data?.unmatched || 0,
+        details: toChange,
+        message: `Auto-assigned ${applied.data?.assigned || 0} driver(s).`,
+      });
+      await fetchPrinters();
+    } catch (e: any) {
+      setAutoDetectResult({
+        ok: false,
+        message: e?.response?.data?.error || 'Auto-detect failed. Check server logs.',
+      });
+    } finally {
+      setAutoDetecting(false);
+    }
   };
 
   const fetchPaperSizes = async () => {
@@ -338,6 +383,29 @@ export default function PrintersPage() {
           </button>
 
           <button
+            onClick={handleAutoDetect}
+            disabled={autoDetecting}
+            className="btn-primary"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '8px',
+              fontSize: '13px',
+              fontWeight: 600,
+              padding: '8px 16px',
+              borderRadius: '8px',
+              cursor: autoDetecting ? 'wait' : 'pointer',
+              opacity: autoDetecting ? 0.7 : 1,
+              background: 'linear-gradient(135deg, rgba(168, 85, 247, 0.2) 0%, rgba(0, 212, 255, 0.2) 100%)',
+              borderColor: 'var(--accent-cyan)'
+            }}
+            title="Detect printer models and match them to catalog drivers automatically"
+          >
+            <Sparkles style={{ width: '16px', height: '16px' }} className={autoDetecting ? 'spin' : ''} />
+            {autoDetecting ? 'Detecting…' : 'Auto-detect Driver'}
+          </button>
+
+          <button
             onClick={() => setShowAddModal(true)}
             className="btn-primary"
             style={{
@@ -358,6 +426,46 @@ export default function PrintersPage() {
           </button>
         </div>
       </div>
+
+      {/* Auto-detect result banner */}
+      {autoDetectResult && (
+        <div style={{
+          display: 'flex',
+          alignItems: 'flex-start',
+          gap: '12px',
+          padding: '14px 16px',
+          marginBottom: '16px',
+          borderRadius: '10px',
+          border: `1px solid ${autoDetectResult.ok ? 'var(--accent-cyan)' : 'var(--accent-red, #ff4d4f)'}`,
+          background: autoDetectResult.ok ? 'rgba(0, 212, 255, 0.08)' : 'rgba(255, 77, 79, 0.08)',
+        }}>
+          <Sparkles style={{ width: '18px', height: '18px', color: 'var(--accent-cyan)', flexShrink: 0, marginTop: '2px' }} />
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)', marginBottom: autoDetectResult.details?.length ? '8px' : 0 }}>
+              {autoDetectResult.message}
+            </div>
+            {autoDetectResult.details?.length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                {autoDetectResult.details.map((d: any) => (
+                  <div key={d.printer_id} style={{ fontSize: '12px', color: 'var(--text-muted)', fontFamily: 'Share Tech Mono, monospace' }}>
+                    <span style={{ color: 'var(--text-primary)' }}>{d.printer_name}</span>
+                    {' → '}
+                    <span style={{ color: 'var(--accent-green)' }}>{d.driver_name}</span>
+                    {' '}({d.confidence}, {Math.round(d.score * 100)}%)
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          <button
+            onClick={() => setAutoDetectResult(null)}
+            style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: 0 }}
+            title="Dismiss"
+          >
+            <X style={{ width: '16px', height: '16px' }} />
+          </button>
+        </div>
+      )}
 
       {/* TIER-1 #3: Filter Bar — search, group, tag */}
       <div style={{
@@ -732,7 +840,7 @@ export default function PrintersPage() {
                   <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border)', paddingBottom: '8px' }}>
                     <span style={{ color: 'var(--text-muted)', fontSize: '13px', fontWeight: 500 }}>Driver</span>
                     <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)', fontFamily: 'Share Tech Mono, monospace' }}>
-                      {printer.driver || 'N/A'}
+                      {printer.driver_name || (printer.driver && printer.driver !== 'Unknown' ? printer.driver : 'N/A')}
                     </span>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border)', paddingBottom: '8px' }}>

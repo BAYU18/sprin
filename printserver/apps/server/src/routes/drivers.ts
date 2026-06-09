@@ -6,6 +6,7 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { logger } from '../utils/logger.js';
+import { findBestDriver, scoreDriver, type DriverLike } from '../utils/driver-matcher.js';
 
 const driverSchema = z.object({
     name: z.string().min(1).max(255),
@@ -39,7 +40,7 @@ export async function setupDriversRoutes(fastify: FastifyInstance) {
 
         const usageMap = new Map<number, number>();
         for (const row of usage) {
-            usageMap.set(row.driver_id, parseInt(row.count as any));
+            usageMap.set(Number(row.driver_id), parseInt(row.count as any));
         }
 
         return drivers.map((d: any) => ({
@@ -232,53 +233,100 @@ export async function setupDriversRoutes(fastify: FastifyInstance) {
         return updated;
     });
 
-    // ── Bulk assign drivers to printers by name match ───────────────────────
+    // ── Smart auto-assign: match printers to catalog drivers by name ────────
+    // Uses the intelligent scoring matcher (model token + brand + overlap).
+    // body.dry_run=true previews matches without writing.
+    // body.reassign=true also re-evaluates printers that already have a driver.
     fastify.post('/api/drivers/auto-assign', async (request: FastifyRequest, reply: FastifyReply) => {
         const body = z.object({
-            match_strategy: z.enum(['name-contains', 'name-exact', 'manufacturer']).default('name-contains'),
-        }).parse(request.body);
+            dry_run: z.boolean().default(false),
+            reassign: z.boolean().default(false),
+            min_score: z.number().min(0).max(1).default(0.5),
+        }).parse(request.body ?? {});
 
-        const printers = await fastify.knex('printers')
+        let pq = fastify.knex('printers')
             .select('id', 'name', 'driver_id')
-            .whereNull('driver_id');
+            .whereRaw("(config->>'auto_removed') IS DISTINCT FROM 'true'");
+        if (!body.reassign) {
+            pq = pq.whereNull('driver_id');
+        }
+        const printers = await pq;
+        const drivers: DriverLike[] = await fastify.knex('printer_drivers')
+            .select('id', 'name', 'manufacturer');
 
-        const drivers = await fastify.knex('printer_drivers').select('*');
-
+        const results: any[] = [];
         let assigned = 0;
+        let skipped = 0;
+
         for (const p of printers) {
-            const pname = p.name.toLowerCase();
-            let match = null;
-
-            for (const d of drivers) {
-                const dname = d.name.toLowerCase();
-                if (body.match_strategy === 'name-exact' && pname === dname) {
-                    match = d;
-                    break;
-                } else if (body.match_strategy === 'name-contains') {
-                    // Match if printer name contains model number from driver
-                    // e.g. "EPSON L3110 Series" contains "L3110"
-                    const modelMatch = dname.match(/(l\d+|m\d+|pixma|laserjet|xpress|ecotank|lx-?\d+)/i);
-                    if (modelMatch && pname.includes(modelMatch[0].toLowerCase())) {
-                        match = d;
-                        break;
-                    }
-                } else if (body.match_strategy === 'manufacturer') {
-                    if (d.manufacturer && pname.includes(d.manufacturer.toLowerCase())) {
-                        match = d;
-                        break;
-                    }
-                }
+            const match = findBestDriver(p.name, drivers, body.min_score);
+            if (!match) {
+                skipped++;
+                results.push({ printer_id: p.id, printer_name: p.name, matched: false });
+                continue;
             }
-
-            if (match) {
+            const willChange = match.driver.id !== p.driver_id;
+            results.push({
+                printer_id: p.id,
+                printer_name: p.name,
+                matched: true,
+                driver_id: match.driver.id,
+                driver_name: match.driver.name,
+                score: Number(match.score.toFixed(2)),
+                confidence: match.confidence,
+                reasons: match.reasons,
+                changed: willChange,
+            });
+            if (!body.dry_run && willChange) {
                 await fastify.knex('printers')
                     .where({ id: p.id })
-                    .update({ driver_id: match.id, updated_at: new Date() });
+                    .update({ driver_id: match.driver.id, updated_at: new Date() });
                 assigned++;
+                fastify.io?.emit('printer:driver-assigned', {
+                    printerId: p.id,
+                    driverId: match.driver.id,
+                });
             }
         }
 
-        logger.info(`[Drivers] Auto-assign: ${assigned}/${printers.length} printers matched`);
-        return { assigned, total: printers.length, strategy: body.match_strategy };
+        logger.info(`[Drivers] Auto-assign (${body.dry_run ? 'dry-run' : 'applied'}): ${assigned} assigned, ${skipped} unmatched of ${printers.length}`);
+        return {
+            dry_run: body.dry_run,
+            total: printers.length,
+            assigned,
+            matched: results.filter((r) => r.matched).length,
+            unmatched: skipped,
+            results,
+        };
+    });
+
+    // ── Suggest the best driver for ONE printer (preview, no write) ─────────
+    fastify.get('/api/printers/:id/driver/suggest', async (request: FastifyRequest, reply: FastifyReply) => {
+        const { id } = request.params as { id: string };
+        const printer = await fastify.knex('printers').where({ id }).first();
+        if (!printer) {
+            return reply.status(404).send({ error: 'Printer not found' });
+        }
+        const drivers: DriverLike[] = await fastify.knex('printer_drivers')
+            .select('id', 'name', 'manufacturer');
+
+        // Rank all drivers so the UI can show top candidates.
+        const ranked = drivers
+            .map((d) => {
+                const { score, reasons } = scoreDriver(printer.name, d);
+                return { driver_id: d.id, driver_name: d.name, manufacturer: d.manufacturer, score: Number(score.toFixed(2)), reasons };
+            })
+            .filter((r) => r.score > 0)
+            .sort((a, b) => b.score - a.score)
+            .slice(0, 5);
+
+        const best = ranked[0] && ranked[0].score >= 0.5 ? ranked[0] : null;
+        return {
+            printer_id: printer.id,
+            printer_name: printer.name,
+            current_driver_id: printer.driver_id,
+            best_match: best,
+            candidates: ranked,
+        };
     });
 }

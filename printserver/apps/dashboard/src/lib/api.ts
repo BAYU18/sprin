@@ -180,8 +180,13 @@ export const drivers = {
   upload: (data: any) => api.post('/api/drivers/upload', data),
   assignToPrinter: (printerId: number, driverId: number | null) =>
     api.put(`/api/printers/${printerId}/driver`, { driver_id: driverId }),
-  autoAssign: (matchStrategy = 'name-contains') =>
-    api.post('/api/drivers/auto-assign', { match_strategy: matchStrategy }),
+  // Smart auto-detect: match printers to catalog drivers by name.
+  // opts.dry_run=true previews; opts.reassign=true re-evaluates assigned printers too.
+  autoAssign: (opts: { dry_run?: boolean; reassign?: boolean; min_score?: number } = {}) =>
+    api.post('/api/drivers/auto-assign', opts),
+  // Rank best driver candidates for a single printer (no write).
+  suggest: (printerId: number) =>
+    api.get(`/api/printers/${printerId}/driver/suggest`),
 };
 
 export default api;
