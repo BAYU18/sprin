@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { paper as paperApi, printers as printersApi } from '@/lib/api';
+import { paper as paperApi, printers as printersApi, clients as clientsApi } from '@/lib/api';
 import { X, Save, FileText, Check } from 'lucide-react';
 
 interface PaperSize {
@@ -49,7 +49,7 @@ export default function AddPrinterModal({ onClose, onCreated, prefill }: Props) 
       try {
         const [sizes, clientsResp] = await Promise.all([
           paperApi.list(),
-          fetch('/api/clients', { credentials: 'include' }).then((r) => r.ok ? r.json() : []),
+          clientsApi.list().then((r) => r.data).catch(() => []),
         ]);
         setAllSizes(sizes.data.sizes);
         setClients(Array.isArray(clientsResp) ? clientsResp : (clientsResp.data || []));

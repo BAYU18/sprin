@@ -52,7 +52,13 @@ async function buildServer() {
 
     await fastify.register(rateLimit, {
         max: parseInt(process.env.RATE_LIMIT_MAX || '100'),
-        timeWindow: parseInt(process.env.RATE_LIMIT_TTL || '60000')
+        timeWindow: parseInt(process.env.RATE_LIMIT_TTL || '60000'),
+        // The dashboard talks to this API through the Next.js proxy, so EVERY
+        // browser request arrives as 127.0.0.1 and would share a single
+        // per-IP bucket — one busy dashboard then 429s everyone. Loopback is
+        // the trusted internal proxy (dashboard users are JWT-authed anyway),
+        // so exempt it. Real agents (LAN IPs) are still rate-limited normally.
+        allowList: ['127.0.0.1', '::1'],
     });
 
     await fastify.register(websocket);

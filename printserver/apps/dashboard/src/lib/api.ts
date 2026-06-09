@@ -171,4 +171,17 @@ export const nodes = {
   delete: (id: number) => api.delete(`/api/nodes/${id}`),
 };
 
+export const drivers = {
+  list: () => api.get('/api/drivers'),
+  get: (id: number) => api.get(`/api/drivers/${id}`),
+  create: (data: any) => api.post('/api/drivers', data),
+  update: (id: number, data: any) => api.put(`/api/drivers/${id}`, data),
+  delete: (id: number) => api.delete(`/api/drivers/${id}`),
+  upload: (data: any) => api.post('/api/drivers/upload', data),
+  assignToPrinter: (printerId: number, driverId: number | null) =>
+    api.put(`/api/printers/${printerId}/driver`, { driver_id: driverId }),
+  autoAssign: (matchStrategy = 'name-contains') =>
+    api.post('/api/drivers/auto-assign', { match_strategy: matchStrategy }),
+};
+
 export default api;

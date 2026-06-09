@@ -57,10 +57,13 @@ export function setupSocketIO(fastify: any) {
 
         socket.on('printer:status', (data) => {
             socket.broadcast.emit('printer:status', data);
+            // socket.broadcast.emit bypasses our io.emit wrapper, so invalidate here too
+            cache.invalidate(cacheKeys.printersList('default')).catch(() => {});
         });
 
         socket.on('client:heartbeat', (data) => {
             socket.broadcast.emit('client:heartbeat', data);
+            cache.invalidate(cacheKeys.clientsList()).catch(() => {});
         });
 
         socket.on('disconnect', (reason) => {
@@ -72,25 +75,31 @@ export function setupSocketIO(fastify: any) {
         });
     });
 
-    // ── TIER-2 #1: Global cache invalidation hooks ──────────────────────────
-    // When any printer/client/job-stats event fires, blow away the
-    // corresponding cache key so the next API call re-reads the DB.
-    const PRINTER_EVENTS = [
-        'printer:update', 'printer:created', 'printer:deleted', 'printer:updated',
-        'printer:status', 'printer:offline', 'printer:driver-assigned',
-        'printer:failover', 'printer:auto-removed', 'printer:queue-cleared'
-    ];
-    for (const evt of PRINTER_EVENTS) {
-        io.on(evt, () => {
-            cache.invalidate(cacheKeys.printersList('default')).catch(() => {});
-        });
-    }
-    io.on('client:heartbeat', () => {
-        cache.invalidate(cacheKeys.clientsList()).catch(() => {});
-    });
-    io.on('client:status-changed', () => {
-        cache.invalidate(cacheKeys.clientsList()).catch(() => {});
-    });
+    // ── TIER-2 #1: Global cache invalidation on broadcast ───────────────────
+    // IMPORTANT: io.on('customEvent') does NOT fire on the server — io.on only
+    // handles 'connection'. Custom events emitted via io.emit() go OUT to
+    // browsers and never trigger a server-side listener. The previous io.on()
+    // hooks here were dead code, so the printers/clients list cache (60s TTL)
+    // was never invalidated on status changes → stale "kadang ada kadang tidak"
+    // data until the TTL happened to expire.
+    //
+    // Fix: wrap io.emit so EVERY broadcast is the single chokepoint that
+    // invalidates the matching cache key. This catches all emit sites
+    // (heartbeat, health-check offline, driver-assign, etc.) without having to
+    // touch a dozen files.
+    const originalEmit = io.emit.bind(io);
+    (io as any).emit = (event: string, ...args: any[]) => {
+        try {
+            if (typeof event === 'string') {
+                if (event.startsWith('printer:')) {
+                    cache.invalidate(cacheKeys.printersList('default')).catch(() => {});
+                } else if (event.startsWith('client:')) {
+                    cache.invalidate(cacheKeys.clientsList()).catch(() => {});
+                }
+            }
+        } catch { /* never let cache invalidation break the emit */ }
+        return originalEmit(event, ...args);
+    };
 
     fastify.decorate('io', io);
 

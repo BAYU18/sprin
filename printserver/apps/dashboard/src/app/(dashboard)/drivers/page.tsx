@@ -16,6 +16,8 @@ import {
     Link as LinkIcon
 } from 'lucide-react';
 
+import { drivers as driversApi, printers as printersApi } from '@/lib/api';
+
 interface Driver {
     id: number;
     name: string;
@@ -52,14 +54,11 @@ export default function DriversPage() {
     const [hoveredDriverId, setHoveredDriverId] = useState<number | null>(null);
     const [hoveredPrinterId, setHoveredPrinterId] = useState<number | null>(null);
 
-    // Menggunakan relative URL agar berjalan di Cloudflare Tunnel dan IP lokal
-    const API_URL = '';
-
     const loadData = useCallback(async () => {
         try {
             const [dRes, pRes] = await Promise.all([
-                fetch(`${API_URL}/api/drivers`).then(r => r.json()),
-                fetch(`${API_URL}/api/printers`).then(r => r.json()),
+                driversApi.list().then(r => r.data),
+                printersApi.list().then(r => r.data),
             ]);
             setDrivers(Array.isArray(dRes) ? dRes : []);
             setPrinters(Array.isArray(pRes) ? pRes : []);
@@ -68,7 +67,7 @@ export default function DriversPage() {
         } finally {
             setLoading(false);
         }
-    }, [API_URL]);
+    }, []);
 
     useEffect(() => {
         loadData();
@@ -77,71 +76,52 @@ export default function DriversPage() {
     const handleAddDriver = async (data: any) => {
         setError(null);
         try {
-            const url = data.fileData ? `${API_URL}/api/drivers/upload` : `${API_URL}/api/drivers`;
-            const r = await fetch(url, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(data),
-            });
-            if (!r.ok) {
-                const err = await r.json();
-                throw new Error(err.error || 'Failed to add');
+            if (data.fileData) {
+                await driversApi.upload(data);
+            } else {
+                await driversApi.create(data);
             }
             setSuccess(data.fileData ? `Driver ZIP "${data.name}" uploaded successfully` : `Driver "${data.name}" added`);
             setShowAddModal(false);
             loadData();
             setTimeout(() => setSuccess(null), 3000);
         } catch (e: any) {
-            setError(e.message);
+            setError(e.response?.data?.error || e.message || 'Failed to add');
         }
     };
 
     const handleDeleteDriver = async (id: number, name: string) => {
         if (!confirm(`Delete driver "${name}"?`)) return;
         try {
-            const r = await fetch(`${API_URL}/api/drivers/${id}`, { method: 'DELETE' });
-            if (!r.ok) {
-                const err = await r.json();
-                throw new Error(err.error || 'Failed to delete');
-            }
+            await driversApi.delete(id);
             setSuccess(`Driver deleted`);
             loadData();
             setTimeout(() => setSuccess(null), 3000);
         } catch (e: any) {
-            setError(e.message);
+            setError(e.response?.data?.error || e.message || 'Failed to delete');
         }
     };
 
     const handleAssignDriver = async (printerId: number, driverId: number | null) => {
         try {
-            const r = await fetch(`${API_URL}/api/printers/${printerId}/driver`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ driver_id: driverId }),
-            });
-            if (!r.ok) throw new Error('Failed to assign');
+            await driversApi.assignToPrinter(printerId, driverId);
             setSuccess(driverId ? 'Driver assigned' : 'Driver unassigned');
             loadData();
             setTimeout(() => setSuccess(null), 2000);
         } catch (e: any) {
-            setError(e.message);
+            setError(e.response?.data?.error || e.message || 'Failed to assign');
         }
     };
 
     const handleAutoAssign = async () => {
         if (!confirm('Auto-assign drivers to unassigned printers based on name match?')) return;
         try {
-            const r = await fetch(`${API_URL}/api/drivers/auto-assign`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ match_strategy: 'name-contains' }),
-            });
-            const result = await r.json();
+            const result = (await driversApi.autoAssign('name-contains')).data;
             setSuccess(`Auto-assigned ${result.assigned} of ${result.total} printers`);
             loadData();
             setTimeout(() => setSuccess(null), 3000);
         } catch (e: any) {
-            setError(e.message);
+            setError(e.response?.data?.error || e.message || 'Failed to auto-assign');
         }
     };
 

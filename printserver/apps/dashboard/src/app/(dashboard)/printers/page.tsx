@@ -79,29 +79,22 @@ export default function PrintersPage() {
 
   const fetchPrinters = useCallback(async () => {
     try {
-      // TIER-1 #3: build query from group/tag/showHidden filters
+      // Server-side filters only (group/tag/showHidden). Name search is
+      // client-side and must NOT be a dependency here, otherwise every
+      // keystroke fires a full /api/printers request → rate-limit storm.
       const params: any = {};
       if (showHidden) params.include_removed = '1';
       if (filterGroup) params.group = filterGroup;
       if (filterTag) params.tag = filterTag;
       const resp = await printersApi.list(params);
-      let list = Array.isArray(resp.data) ? resp.data : [];
-      // TIER-1 #3: client-side name search across group/name/slug
-      if (filterSearch.trim()) {
-        const q = filterSearch.toLowerCase();
-        list = list.filter((p: any) =>
-          (p.name || '').toLowerCase().includes(q) ||
-          (p.slug || '').toLowerCase().includes(q) ||
-          (p.group_name || '').toLowerCase().includes(q)
-        );
-      }
+      const list = Array.isArray(resp.data) ? resp.data : [];
       setPrinters(list);
     } catch (error) {
       console.error('Failed to fetch printers:', error);
     } finally {
       setLoading(false);
     }
-  }, [showHidden, filterGroup, filterTag, filterSearch]);
+  }, [showHidden, filterGroup, filterTag]);
 
   const fetchGroupsAndTags = useCallback(async () => {
     try {
@@ -222,6 +215,19 @@ export default function PrintersPage() {
   const onlinePrintersCount = printers.filter(p => p.status === 'online').length;
   const offlinePrintersCount = activePrintersList.filter(p => p.status === 'offline').length;
   const hiddenPrintersCount = hiddenCount;
+
+  // Client-side name search (no API call). Applied at render-time so typing in
+  // the search box never triggers a network request.
+  const displayPrinters = filterSearch.trim()
+    ? printers.filter((p: any) => {
+        const q = filterSearch.toLowerCase();
+        return (
+          (p.name || '').toLowerCase().includes(q) ||
+          (p.slug || '').toLowerCase().includes(q) ||
+          (p.group_name || '').toLowerCase().includes(q)
+        );
+      })
+    : printers;
 
   // Helper for status styles
   const getStatusStyle = (status: string) => {
@@ -638,7 +644,7 @@ export default function PrintersPage() {
         </div>
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '20px' }}>
-          {printers.map((printer) => {
+          {displayPrinters.map((printer) => {
             const currentPaper = printer.config?.paper?.size || null;
             const effectivePaper = currentPaper || paperDefault;
             const isAutoRemoved = printer.config?.auto_removed === 'true';
