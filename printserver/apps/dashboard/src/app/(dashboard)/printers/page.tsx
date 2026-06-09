@@ -7,7 +7,7 @@ import { on, off } from '@/hooks/useSocket';
 import {
   Printer, Plus, RefreshCw, CheckCircle, XCircle,
   AlertTriangle, MoreVertical, Trash2, Edit, FileText, Eye, EyeOff, ChevronDown,
-  Play, Ban, Filter, Tag, Folder, Search, X, Monitor, Sparkles
+  Play, Ban, Filter, Tag, Folder, Search, X, Monitor, Sparkles, Download
 } from 'lucide-react';
 import Link from 'next/link';
 import AddPrinterModal from '@/components/AddPrinterModal';
@@ -1199,6 +1199,37 @@ export default function PrintersPage() {
                   >
                     <FileText style={{ width: '16px', height: '16px' }} />
                   </button>
+
+                  {/* Download Installer (.bat) Button — per-printer, auto port + driver */}
+                  <a
+                    href={`/downloads/printer-bat/${printer.slug || ''}`}
+                    download
+                    title="Download installer .bat khusus printer ini (auto port + driver)"
+                    style={{
+                      width: '36px',
+                      height: '36px',
+                      borderRadius: '8px',
+                      border: '1px solid rgba(0, 255, 136, 0.3)',
+                      background: 'rgba(0, 255, 136, 0.1)',
+                      color: 'var(--accent-green)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s',
+                      textDecoration: 'none'
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = 'rgba(0, 255, 136, 0.2)';
+                      e.currentTarget.style.boxShadow = 'var(--glow-green)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = 'rgba(0, 255, 136, 0.1)';
+                      e.currentTarget.style.boxShadow = 'none';
+                    }}
+                  >
+                    <Download style={{ width: '16px', height: '16px' }} />
+                  </a>
 
                   {/* Delete Button */}
                   <button
