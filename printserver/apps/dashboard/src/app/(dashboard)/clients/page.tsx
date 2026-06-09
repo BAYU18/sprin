@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { clients as clientsApi } from '@/lib/api';
 import { on, off } from '@/hooks/useSocket';
 import {
@@ -9,6 +10,7 @@ import {
 import { format } from 'date-fns';
 
 export default function ClientsPage() {
+  const router = useRouter();
   const [clients, setClients] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -268,7 +270,10 @@ export default function ClientsPage() {
           {normalisedClients.map((client) => {
             const printers = client.metadata?.printers || [];
             return (
-              <div key={client.id} className="card" style={{ display: 'flex', flexDirection: 'column', padding: '20px', minHeight: '320px', justifyContent: 'space-between' }}>
+              <div key={client.id} onClick={() => router.push(`/clients/${client.id}`)} className="card" style={{ display: 'flex', flexDirection: 'column', padding: '20px', minHeight: '320px', justifyContent: 'space-between', cursor: 'pointer', transition: 'all 0.2s ease' }}
+                onMouseEnter={(e) => { e.currentTarget.style.borderColor = 'rgba(0, 212, 255, 0.5)'; e.currentTarget.style.boxShadow = '0 0 16px rgba(0, 212, 255, 0.15)'; e.currentTarget.style.transform = 'translateY(-2px)'; }}
+                onMouseLeave={(e) => { e.currentTarget.style.borderColor = ''; e.currentTarget.style.boxShadow = ''; e.currentTarget.style.transform = ''; }}
+              >
                 
                 {/* Client Header Info */}
                 <div>
@@ -396,7 +401,7 @@ export default function ClientsPage() {
                 {/* Card footer actions */}
                 <div style={{ display: 'flex', justifyContent: 'flex-end', paddingTop: '12px', marginTop: '12px', borderTop: '1px solid var(--border)' }}>
                   <button
-                    onClick={() => handleDelete(client.id)}
+                    onClick={(e) => { e.stopPropagation(); handleDelete(client.id); }}
                     style={{
                       padding: '8px 12px',
                       background: 'rgba(255, 61, 90, 0.08)',

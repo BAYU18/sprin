@@ -247,6 +247,82 @@ body {
   border-top: 1px solid var(--border);
 }
 
+/* User chip + logout */
+.user-chip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.user-avatar {
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  font-family: 'Share Tech Mono', monospace;
+  font-weight: 700;
+  color: #04121a;
+  background: linear-gradient(135deg, #00d4ff, #b400ff);
+  box-shadow: 0 0 10px rgba(0,212,255,0.4);
+}
+
+.user-meta {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.user-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.user-role {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--accent-cyan);
+}
+
+.logout-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  padding: 9px 12px;
+  margin-bottom: 12px;
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 12px;
+  letter-spacing: 2px;
+  color: #ff5c8a;
+  background: rgba(255, 0, 80, 0.08);
+  border: 1px solid rgba(255, 0, 80, 0.4);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.2s, box-shadow 0.2s, color 0.2s;
+}
+
+.logout-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.logout-btn:hover {
+  color: #ff85a8;
+  background: rgba(255, 0, 80, 0.16);
+  box-shadow: 0 0 14px rgba(255, 0, 80, 0.3);
+}
+
 .server-uptime {
   font-family: 'Share Tech Mono', monospace;
   font-size: 12px;

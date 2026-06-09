@@ -128,29 +128,82 @@ export async function setupNodesRoutes(fastify: FastifyInstance) {
         const query = nodeQuerySchema.parse(request.query);
         const { page, limit, status } = query;
 
-        let queryBuilder = fastify.knex('windows_nodes')
-            .select('windows_nodes.*')
-            .leftJoin('clients', 'windows_nodes.hostname', 'clients.hostname')
-            .select(fastify.knex.raw('clients.is_online as client_online'));
+        // SINGLE SOURCE OF TRUTH: read from `clients` (the table the agent
+        // actually heartbeats into). The legacy `windows_nodes` table is unused
+        // by the agent and was always empty, which made this endpoint disagree
+        // with the Clients page and the manage-agent.bat node-status probe.
+        // "Online" = is_online flag set AND a fresh heartbeat (<= STALE_SECONDS).
+        const STALE_SECONDS = 90;
+        const staleCutoff = new Date(Date.now() - STALE_SECONDS * 1000);
 
-        if (status !== 'all') {
-            queryBuilder = queryBuilder.where('windows_nodes.is_online', status === 'online');
+        let qb = fastify.knex('clients').select('*');
+        if (status === 'online') {
+            qb = qb.where('is_online', true).where('last_seen', '>=', staleCutoff);
+        } else if (status === 'offline') {
+            qb = qb.where(function (this: any) {
+                this.where('is_online', false).orWhere('last_seen', '<', staleCutoff).orWhereNull('last_seen');
+            });
         }
 
-        const nodes = await queryBuilder
-            .orderBy('windows_nodes.last_heartbeat', 'desc')
+        const rows = await qb
+            .orderBy('hostname')
             .limit(limit)
             .offset((page - 1) * limit);
 
-        const [{ count }] = await fastify.knex('windows_nodes')
-            .count('* as count');
+        // Enrich each node with printer counts + queue depth so the dashboard
+        // cards show real stats (the old windows_nodes blob is gone).
+        const ids = rows.map((r: any) => r.id);
+        const printerCounts: Record<number, { online: number; offline: number; total: number }> = {};
+        const queueCounts: Record<number, number> = {};
+        if (ids.length) {
+            const pr = await fastify.knex('printers')
+                .whereIn('client_id', ids)
+                .select('client_id', 'status');
+            for (const p of pr as any[]) {
+                const c = printerCounts[p.client_id] || { online: 0, offline: 0, total: 0 };
+                c.total += 1;
+                if ((p.status || '').toLowerCase() === 'online') c.online += 1; else c.offline += 1;
+                printerCounts[p.client_id] = c;
+            }
+            const jq = await fastify.knex('print_jobs')
+                .whereIn('client_id', ids)
+                .whereIn('status', ['pending', 'printing'])
+                .select('client_id')
+                .count('* as count')
+                .groupBy('client_id');
+            for (const j of jq as any[]) queueCounts[j.client_id] = parseInt(j.count, 10) || 0;
+        }
 
-        return {
-            nodes,
-            total: count,
-            page,
-            limit
-        };
+        const nodes = rows.map((r: any) => {
+            const fresh = r.last_seen ? new Date(r.last_seen).getTime() >= staleCutoff.getTime() : false;
+            const effectiveOnline = r.is_online === true && fresh;
+            const pc = printerCounts[r.id] || { online: 0, offline: 0, total: 0 };
+            const meta = (r.metadata as any) || {};
+            return {
+                id: r.id,
+                hostname: r.hostname,
+                ip_address: r.ip_address,
+                os_version: r.os_version,
+                node_version: r.client_version,
+                is_online: effectiveOnline,
+                last_heartbeat: r.last_seen,
+                printer_stats: {
+                    printers_online: pc.online,
+                    printers_offline: pc.offline,
+                    jobs_in_queue: queueCounts[r.id] || 0,
+                    printer_count: pc.total,
+                },
+                system_stats: {
+                    cpu_usage: meta?.stats?.cpu_usage ?? 0,
+                    memory_usage: meta?.stats?.memory_usage ?? 0,
+                },
+                created_at: r.created_at,
+            };
+        });
+
+        const [{ count }] = await fastify.knex('clients').count('* as count');
+
+        return { nodes, total: parseInt(count as any, 10) || nodes.length, page, limit };
     });
 
     fastify.get('/:id', async (request, reply) => {

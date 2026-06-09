@@ -124,9 +124,46 @@ export function startAutoClearOffline(fastify: any) {
             } catch (err) {
                 logger.error(`[AutoHeal] autoClearOfflinePrinters crashed: ${(err as Error)?.message || err}`);
             }
+            try {
+                await clearStaleNodes(fastify);
+            } catch (err) {
+                logger.error(`[AutoHeal] clearStaleNodes crashed: ${(err as Error)?.message || err}`);
+            }
         })();
     }, 5 * 60000);
     logger.info('[AutoHeal] autoClearOfflinePrinters scheduled (every 5 min, 15 min offline threshold)');
+}
+
+// Node stale-offline sweep. The agent heartbeat sets is_online=true but nothing
+// ever flips it back to false when a node goes quiet (crash, network drop,
+// killed agent), so dead nodes lingered as "online" for days. This flips any
+// client whose last heartbeat is older than the stale window to is_online=false
+// and notifies dashboards in real time. Runs every 5 min (piggybacks the
+// existing auto-clear timer); the window is short enough that the dashboard
+// self-corrects quickly without fighting healthy 30s heartbeats.
+const NODE_STALE_MINUTES = 2;
+async function clearStaleNodes(fastify: any) {
+    const cutoff = new Date(Date.now() - NODE_STALE_MINUTES * 60000);
+    const stale = await fastify.knex('clients')
+        .where('is_online', true)
+        .where(function (this: any) {
+            this.where('last_seen', '<', cutoff).orWhereNull('last_seen');
+        })
+        .select('id', 'hostname', 'last_seen');
+
+    for (const node of stale) {
+        await fastify.knex('clients')
+            .where({ id: node.id })
+            .update({ is_online: false, updated_at: new Date() });
+
+        fastify.io?.emit('client:offline', { clientId: node.id });
+        logger.warn(
+            `[AutoHeal] Node ${node.hostname} (id=${node.id}) marked offline — no heartbeat since ${node.last_seen || 'never'}`
+        );
+    }
+    if (stale.length) {
+        logger.info(`[AutoHeal] clearStaleNodes flipped ${stale.length} stale node(s) offline`);
+    }
 }
 
 async function checkStuckJobs(fastify: any) {

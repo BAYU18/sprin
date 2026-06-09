@@ -33,6 +33,39 @@ const heartbeatSchema = z.object({
     jobs: z.any().optional()
 });
 
+// Derive the real client IP from the TCP connection. Normalizes the
+// IPv4-mapped IPv6 form (::ffff:192.168.1.5 → 192.168.1.5) that Node emits on
+// dual-stack sockets. This is the server's source of truth — far more reliable
+// than the address the agent self-reports (which can be a link-local fe80::,
+// a virtual adapter, or null).
+function getConnectionIp(request: any): string | null {
+    let ip: string = request.ip || request.socket?.remoteAddress || '';
+    if (!ip) return null;
+    // Strip IPv4-mapped IPv6 prefix
+    if (ip.startsWith('::ffff:')) ip = ip.slice(7);
+    // Loopback isn't useful as a node address
+    if (ip === '::1' || ip === '127.0.0.1') return null;
+    return ip;
+}
+
+// A "good" address is a real routable LAN address, not a link-local IPv6,
+// loopback, or empty value.
+function isUsableIp(a: string | null | undefined): boolean {
+    if (!a) return false;
+    if (/^fe80:/i.test(a)) return false;        // IPv6 link-local
+    if (a === '::1' || a === '127.0.0.1') return false;
+    if (a === '0.0.0.0' || a === '::') return false;
+    return true;
+}
+
+// Pick the best IP to store: trust the agent's reported address only when it's
+// usable; otherwise fall back to the real connection IP the server observed.
+function resolveClientIp(reported: string | null | undefined, request: any): string | null {
+    if (isUsableIp(reported)) return reported as string;
+    const conn = getConnectionIp(request);
+    return isUsableIp(conn) ? conn : (reported || null);
+}
+
 export async function setupClientsRoutes(fastify: FastifyInstance) {
     fastify.get('/', async (request, reply) => {
         const clients = await fastify.knex('clients')
@@ -61,7 +94,40 @@ export async function setupClientsRoutes(fastify: FastifyInstance) {
             .orderBy('created_at', 'desc')
             .limit(10);
 
-        return { ...client, printers, recentJobs };
+        // Aggregate job statistics for this node (all-time + today).
+        const statusRows = await fastify.knex('print_jobs')
+            .where({ client_id: id })
+            .select('status')
+            .count('* as count')
+            .groupBy('status');
+
+        const jobStats: Record<string, number> = {
+            total: 0, completed: 0, failed: 0, printing: 0, pending: 0, cancelled: 0,
+        };
+        for (const row of statusRows as any[]) {
+            const cnt = parseInt(row.count, 10) || 0;
+            jobStats.total += cnt;
+            const s = (row.status || '').toLowerCase();
+            if (s in jobStats) jobStats[s] += cnt;
+        }
+
+        const [pagesAgg] = await fastify.knex('print_jobs')
+            .where({ client_id: id })
+            .sum({ pages: 'pages' })
+            .sum({ pagesPrinted: 'pages_printed' });
+        jobStats.totalPages = parseInt(pagesAgg?.pages as any, 10) || 0;
+        jobStats.pagesPrinted = parseInt(pagesAgg?.pagesPrinted as any, 10) || 0;
+
+        // Jobs submitted today (local server time).
+        const startOfDay = new Date();
+        startOfDay.setHours(0, 0, 0, 0);
+        const [{ count: todayCount } = { count: 0 }] = await fastify.knex('print_jobs')
+            .where({ client_id: id })
+            .where('created_at', '>=', startOfDay)
+            .count('* as count') as any[];
+        jobStats.today = parseInt(todayCount as any, 10) || 0;
+
+        return { ...client, printers, recentJobs, jobStats };
     });
 
     fastify.post('/register', async (request, reply) => {
@@ -71,7 +137,7 @@ export async function setupClientsRoutes(fastify: FastifyInstance) {
             const hostname = raw.hostname || raw.name || 'unknown';
             const clientVersion = raw.client_version || raw.version || '1.0.0';
             const secretKey = raw.secret_key || raw.secretKey;
-            const ipAddress = raw.ip_address || null;
+            const ipAddress = resolveClientIp(raw.ip_address, request);
             const osVersion = raw.os_version || raw.platform || null;
 
             const insertData = {
@@ -166,13 +232,23 @@ export async function setupClientsRoutes(fastify: FastifyInstance) {
 
         const { status, printers, jobs } = body;
 
+        // Refresh the stored IP from the live connection so nodes that
+        // registered with a bad address (link-local fe80::, virtual adapter,
+        // or null) get self-healed on their next heartbeat — no re-install or
+        // re-register needed on the client.
+        const connIp = getConnectionIp(request);
+        const updateFields: any = {
+            is_online: status === 'online',
+            last_seen: new Date(),
+            metadata: { printers, jobs }
+        };
+        if (isUsableIp(connIp)) {
+            updateFields.ip_address = connIp;
+        }
+
         await fastify.knex('clients')
             .where({ id })
-            .update({
-                is_online: status === 'online',
-                last_seen: new Date(),
-                metadata: { printers, jobs }
-            });
+            .update(updateFields);
 
         // Sync printer list from agent heartbeat
         if (Array.isArray(printers)) {
@@ -222,7 +298,17 @@ export async function setupClientsRoutes(fastify: FastifyInstance) {
 
             const seen = new Set<string>();
             const processedNames: string[] = [];
-            
+
+            // Fetch this node's hostname once — used to build self-describing
+            // slugs for NEW printers (e.g. epson-l3210-series-it99) so identical
+            // printer models on different nodes get distinct, readable IPP URLs.
+            // Existing printers keep their current slug (no rename — avoids
+            // breaking already-installed client printer ports).
+            const nodeRow = await fastify.knex('clients').where({ id }).first();
+            const hostToken = generatePrinterSlug(nodeRow?.hostname || `node-${id}`)
+                .replace(/-/g, '')      // collapse to compact token: "it-99" → "it99"
+                .slice(0, 24) || `node${id}`;
+
             for (const printer of filteredPrinters) {
                 const trimmedName = printer.name.trim();
                 const key = trimmedName.toLowerCase();
@@ -272,10 +358,13 @@ export async function setupClientsRoutes(fastify: FastifyInstance) {
                         logger.info(`[Heartbeat] Restored auto-removed printer "${trimmedName}" (id=${existing.id}) — node back online`);
                     }
                 } else {
-                    // Auto-generate unique slug for new printer
+                    // Auto-generate a self-describing unique slug for NEW printers:
+                    // "<printer-name>-<host-token>" → epson-l3210-series-it99.
+                    // ensureUniquePrinterSlug still appends -2/-3 in the rare case
+                    // the same model exists twice on the SAME node.
                     const slug = await ensureUniquePrinterSlug(
                         fastify.knex,
-                        generatePrinterSlug(trimmedName)
+                        `${generatePrinterSlug(trimmedName)}-${hostToken}`
                     );
                     await fastify.knex('printers')
                         .insert({

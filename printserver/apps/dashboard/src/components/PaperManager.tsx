@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { paper as paperApi } from '@/lib/api';
-import { Plus, Trash2, FileText, Check } from 'lucide-react';
+import { Plus, Trash2, FileText, Check, Star, Ruler, X } from 'lucide-react';
 
 interface PaperSize {
   name: string;
@@ -102,79 +102,152 @@ export default function PaperManager({ compact = false }: { compact?: boolean })
     }
   };
 
+  // Mini visual paper preview — aspect ratio reflects real dimensions.
+  const PaperGlyph = ({ w, h, color }: { w: number; h: number; color: string }) => {
+    const ratio = w / h;
+    const boxH = 34;
+    const boxW = Math.max(14, Math.min(40, boxH * ratio));
+    return (
+      <div style={{
+        width: 44, height: 40, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+      }}>
+        <div style={{
+          width: boxW, height: boxH,
+          border: `1.5px solid ${color}`,
+          borderRadius: 3,
+          background: `${color}14`,
+          boxShadow: `0 0 8px ${color}40`,
+          position: 'relative',
+        }}>
+          <div style={{ position: 'absolute', top: 4, left: 3, right: 3, height: 1.5, background: `${color}55`, borderRadius: 2 }} />
+          <div style={{ position: 'absolute', top: 8, left: 3, right: 6, height: 1.5, background: `${color}40`, borderRadius: 2 }} />
+          <div style={{ position: 'absolute', top: 12, left: 3, right: 4, height: 1.5, background: `${color}30`, borderRadius: 2 }} />
+        </div>
+      </div>
+    );
+  };
+
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-32">
-        <div className="text-slate-400 text-sm">Loading paper sizes...</div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 128, gap: 10, color: 'var(--text-muted)' }}>
+        <Ruler size={16} style={{ animation: 'spin 1.5s linear infinite' }} />
+        <span style={{ fontSize: 13 }}>Loading paper sizes...</span>
       </div>
     );
   }
 
   return (
-    <div className="space-y-4">
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
       {message && (
-        <div className={`p-3 rounded-lg border text-sm ${
-          message.type === 'success'
-            ? 'bg-green-500/10 border-green-500/30 text-green-400'
-            : 'bg-red-500/10 border-red-500/30 text-red-400'
-        }`}>
+        <div style={{
+          padding: '12px 14px', borderRadius: 10, fontSize: 13, display: 'flex', alignItems: 'center', gap: 8,
+          color: message.type === 'success' ? 'var(--accent-green)' : 'var(--accent-red)',
+          background: message.type === 'success' ? 'rgba(0,255,136,0.08)' : 'rgba(255,61,90,0.08)',
+          border: `1px solid ${message.type === 'success' ? 'rgba(0,255,136,0.35)' : 'rgba(255,61,90,0.35)'}`,
+          boxShadow: message.type === 'success' ? 'var(--glow-green)' : 'var(--glow-red)',
+        }}>
+          {message.type === 'success' ? <Check size={15} /> : <X size={15} />}
           {message.text}
         </div>
       )}
 
-      <div>
-        <label className="block text-sm text-slate-400 mb-2">
-          Server-wide default paper size
-        </label>
-        <select
-          value={defaultName}
-          onChange={(e) => handleSetDefault(e.target.value)}
-          disabled={saving}
-          className="input w-auto min-w-[200px]"
-        >
-          {allSizes.map((s) => (
-            <option key={s.name} value={s.name}>
-              {s.name} ({s.widthMm}×{s.heightMm}mm) {s.builtin ? '' : '(custom)'}
-            </option>
-          ))}
-        </select>
-        <p className="text-xs text-slate-500 mt-1">
-          Applied to all printers that don't have a per-printer override.
-        </p>
-      </div>
-
-      <div className="border-t border-slate-700 pt-4">
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="font-medium flex items-center gap-2">
-            <FileText className="w-4 h-4" /> Custom paper sizes
-            <span className="text-xs text-slate-500">({customSizes.length})</span>
+      {/* ===== Default paper size — clickable card grid ===== */}
+      <section>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+          <Star size={15} style={{ color: 'var(--accent-amber)' }} />
+          <h3 style={{ fontSize: 13, fontWeight: 700, fontFamily: "'Rajdhani', sans-serif", textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-primary)', margin: 0 }}>
+            Server-wide Default
           </h3>
+        </div>
+        <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: '0 0 14px' }}>
+          Klik salah satu ukuran untuk menjadikannya default. Berlaku untuk semua printer tanpa override khusus.
+        </p>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 10 }}>
+          {allSizes.map((s) => {
+            const isDefault = s.name === defaultName;
+            return (
+              <button
+                key={s.name}
+                onClick={() => !isDefault && handleSetDefault(s.name)}
+                disabled={saving}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 10, textAlign: 'left',
+                  padding: '10px 12px', borderRadius: 10, cursor: isDefault ? 'default' : 'pointer',
+                  background: isDefault ? 'rgba(0,212,255,0.1)' : 'var(--bg-secondary)',
+                  border: `1px solid ${isDefault ? 'var(--accent-cyan)' : 'var(--border)'}`,
+                  boxShadow: isDefault ? 'var(--glow-cyan)' : 'none',
+                  transition: 'all 0.2s ease', position: 'relative',
+                }}
+              >
+                <PaperGlyph w={s.widthMm} h={s.heightMm} color={isDefault ? 'var(--accent-cyan)' : 'var(--text-muted)'} />
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ fontSize: 14, fontWeight: 700, color: isDefault ? 'var(--accent-cyan)' : 'var(--text-primary)' }}>{s.name}</span>
+                    {!s.builtin && (
+                      <span style={{ fontSize: 9, padding: '1px 5px', borderRadius: 4, background: 'rgba(245,158,11,0.15)', color: 'var(--accent-amber)', fontWeight: 700, letterSpacing: '0.5px' }}>CUSTOM</span>
+                    )}
+                  </div>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: "'Share Tech Mono', monospace" }}>
+                    {s.widthMm}×{s.heightMm} mm
+                  </div>
+                </div>
+                {isDefault && (
+                  <div style={{ position: 'absolute', top: 6, right: 6, color: 'var(--accent-cyan)' }}>
+                    <Check size={14} />
+                  </div>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </section>
+
+      {/* ===== Custom paper sizes ===== */}
+      <section style={{ borderTop: '1px solid var(--border)', paddingTop: 20 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <FileText size={15} style={{ color: 'var(--accent-cyan)' }} />
+            <h3 style={{ fontSize: 13, fontWeight: 700, fontFamily: "'Rajdhani', sans-serif", textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-primary)', margin: 0 }}>
+              Custom Paper Sizes
+            </h3>
+            <span style={{ fontSize: 11, padding: '1px 7px', borderRadius: 10, background: 'var(--bg-secondary)', border: '1px solid var(--border)', color: 'var(--text-muted)', fontFamily: "'Share Tech Mono', monospace" }}>
+              {customSizes.length}
+            </span>
+          </div>
           {!showAddForm && (
             <button
               onClick={() => setShowAddForm(true)}
-              className="btn-secondary flex items-center gap-1 text-sm"
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 14px', borderRadius: 8,
+                background: 'rgba(0,212,255,0.1)', border: '1px solid var(--accent-cyan)', color: 'var(--accent-cyan)',
+                fontSize: 12, fontWeight: 600, cursor: 'pointer', transition: 'all 0.2s ease',
+              }}
             >
-              <Plus className="w-4 h-4" /> Add custom
+              <Plus size={14} /> Add Custom
             </button>
           )}
         </div>
 
         {showAddForm && (
-          <div className="bg-slate-700/30 rounded-lg p-4 mb-3 border border-slate-600">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
+          <div style={{
+            background: 'var(--bg-secondary)', borderRadius: 12, padding: 18, marginBottom: 16,
+            border: '1px solid rgba(0,212,255,0.35)', boxShadow: 'var(--glow-cyan)',
+          }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12, marginBottom: 14 }}>
               <div>
-                <label className="block text-xs text-slate-400 mb-1">Name</label>
+                <label style={{ display: 'block', fontSize: 11, color: 'var(--text-muted)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Name</label>
                 <input
                   type="text"
                   value={newName}
                   onChange={(e) => setNewName(e.target.value)}
-                  placeholder="Kwitansi, Amplop-DL, etc."
+                  placeholder="Kwitansi, Amplop-DL..."
                   className="input w-full"
                   maxLength={40}
                 />
               </div>
               <div>
-                <label className="block text-xs text-slate-400 mb-1">Width (mm)</label>
+                <label style={{ display: 'block', fontSize: 11, color: 'var(--text-muted)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Width (mm)</label>
                 <input
                   type="number"
                   value={newWidth}
@@ -184,7 +257,7 @@ export default function PaperManager({ compact = false }: { compact?: boolean })
                 />
               </div>
               <div>
-                <label className="block text-xs text-slate-400 mb-1">Height (mm)</label>
+                <label style={{ display: 'block', fontSize: 11, color: 'var(--text-muted)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Height (mm)</label>
                 <input
                   type="number"
                   value={newHeight}
@@ -194,18 +267,25 @@ export default function PaperManager({ compact = false }: { compact?: boolean })
                 />
               </div>
             </div>
-            <div className="flex gap-2">
+            <div style={{ display: 'flex', gap: 8 }}>
               <button
                 onClick={handleAddCustom}
                 disabled={saving}
-                className="btn-primary flex items-center gap-1 text-sm"
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 16px', borderRadius: 8,
+                  background: 'var(--accent-cyan)', border: '1px solid var(--accent-cyan)', color: '#04121a',
+                  fontSize: 13, fontWeight: 700, cursor: 'pointer', opacity: saving ? 0.6 : 1,
+                }}
               >
-                <Check className="w-4 h-4" /> Save
+                <Check size={15} /> Save
               </button>
               <button
                 onClick={() => { setShowAddForm(false); setNewName(''); }}
                 disabled={saving}
-                className="btn-secondary text-sm"
+                style={{
+                  padding: '8px 16px', borderRadius: 8, background: 'transparent',
+                  border: '1px solid var(--border)', color: 'var(--text-muted)', fontSize: 13, fontWeight: 600, cursor: 'pointer',
+                }}
               >
                 Cancel
               </button>
@@ -214,48 +294,74 @@ export default function PaperManager({ compact = false }: { compact?: boolean })
         )}
 
         {customSizes.length === 0 ? (
-          <p className="text-sm text-slate-500 italic">No custom paper sizes yet.</p>
+          <div style={{
+            display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8,
+            padding: '28px 16px', border: '1px dashed var(--border)', borderRadius: 12, color: 'var(--text-muted)',
+          }}>
+            <FileText size={22} style={{ color: 'var(--text-dim)' }} />
+            <span style={{ fontSize: 12 }}>Belum ada ukuran kertas custom.</span>
+          </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 10 }}>
             {customSizes.map((s) => (
               <div
                 key={s.name}
-                className="flex items-center justify-between bg-slate-700/40 rounded-lg p-3 border border-slate-600"
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 10,
+                  background: 'var(--bg-secondary)', borderRadius: 10, padding: '10px 12px',
+                  border: '1px solid var(--border)',
+                }}
               >
-                <div>
-                  <div className="font-medium text-sm">{s.name}</div>
-                  <div className="text-xs text-slate-400">
-                    {s.widthMm}×{s.heightMm}mm
+                <PaperGlyph w={s.widthMm} h={s.heightMm} color="var(--accent-amber)" />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>{s.name}</div>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: "'Share Tech Mono', monospace" }}>
+                    {s.widthMm}×{s.heightMm} mm
                   </div>
                 </div>
                 <button
                   onClick={() => handleRemove(s.name)}
                   disabled={saving}
-                  className="text-red-400 hover:text-red-300 p-1"
                   title="Remove"
+                  style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', width: 32, height: 32, borderRadius: 8,
+                    background: 'rgba(255,61,90,0.1)', border: '1px solid rgba(255,61,90,0.3)', color: 'var(--accent-red)',
+                    cursor: 'pointer', flexShrink: 0, transition: 'all 0.2s ease',
+                  }}
                 >
-                  <Trash2 className="w-4 h-4" />
+                  <Trash2 size={15} />
                 </button>
               </div>
             ))}
           </div>
         )}
-      </div>
+      </section>
 
+      {/* ===== Built-in reference ===== */}
       {!compact && (
-        <div className="border-t border-slate-700 pt-4">
-          <h3 className="font-medium mb-2 text-sm text-slate-300">
-            Built-in paper sizes ({allSizes.filter(s => s.builtin).length})
-          </h3>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-1 text-xs text-slate-400">
+        <section style={{ borderTop: '1px solid var(--border)', paddingTop: 20 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+            <Ruler size={15} style={{ color: 'var(--text-muted)' }} />
+            <h3 style={{ fontSize: 13, fontWeight: 700, fontFamily: "'Rajdhani', sans-serif", textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-primary)', margin: 0 }}>
+              Built-in Sizes
+            </h3>
+            <span style={{ fontSize: 11, padding: '1px 7px', borderRadius: 10, background: 'var(--bg-secondary)', border: '1px solid var(--border)', color: 'var(--text-muted)', fontFamily: "'Share Tech Mono', monospace" }}>
+              {allSizes.filter(s => s.builtin).length}
+            </span>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: 6 }}>
             {allSizes.filter(s => s.builtin).map(s => (
-              <div key={s.name} className="flex justify-between bg-slate-800/40 rounded px-2 py-1">
-                <span>{s.name}</span>
-                <span className="text-slate-500">{s.widthMm}×{s.heightMm}</span>
+              <div key={s.name} style={{
+                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                background: 'var(--bg-primary)', borderRadius: 6, padding: '6px 10px',
+                border: '1px solid var(--border)', fontSize: 12,
+              }}>
+                <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{s.name}</span>
+                <span style={{ color: 'var(--text-muted)', fontFamily: "'Share Tech Mono', monospace", fontSize: 11 }}>{s.widthMm}×{s.heightMm}</span>
               </div>
             ))}
           </div>
-        </div>
+        </section>
       )}
     </div>
   );

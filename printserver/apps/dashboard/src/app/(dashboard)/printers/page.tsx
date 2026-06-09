@@ -2,14 +2,16 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { printers as printersApi, paper as paperApi } from '@/lib/api';
+import api from '@/lib/api';
 import { on, off } from '@/hooks/useSocket';
 import {
   Printer, Plus, RefreshCw, CheckCircle, XCircle,
   AlertTriangle, MoreVertical, Trash2, Edit, FileText, Eye, EyeOff, ChevronDown,
-  Play, Ban, Filter, Tag, Folder, Search, X
+  Play, Ban, Filter, Tag, Folder, Search, X, Monitor
 } from 'lucide-react';
 import Link from 'next/link';
 import AddPrinterModal from '@/components/AddPrinterModal';
+import PrinterPaperConfig from '@/components/PrinterPaperConfig';
 
 interface PaperSize {
   name: string;
@@ -32,6 +34,8 @@ export default function PrintersPage() {
   const [showHidden, setShowHidden] = useState(false);
   const [hiddenCount, setHiddenCount] = useState(0);
   const [showAddModal, setShowAddModal] = useState(false);
+  // Per-printer paper config modal (full: size + orientation + tray + custom)
+  const [paperConfigPrinter, setPaperConfigPrinter] = useState<{ id: number; name: string } | null>(null);
   const [paperSizes, setPaperSizes] = useState<PaperSize[]>([]);
   const [paperDefault, setPaperDefault] = useState('A4');
   // Track which printer card has the paper dropdown open
@@ -76,27 +80,22 @@ export default function PrintersPage() {
   const fetchPrinters = useCallback(async () => {
     try {
       // TIER-1 #3: build query from group/tag/showHidden filters
-      const params = new URLSearchParams();
-      if (showHidden) params.set('include_removed', '1');
-      if (filterGroup) params.set('group', filterGroup);
-      if (filterTag) params.set('tag', filterTag);
-      const qs = params.toString();
-      const url = '/api/printers' + (qs ? `?${qs}` : '');
-      const resp = await fetch(url, { credentials: 'include' });
-      if (resp.ok) {
-        const data = await resp.json();
-        let list = Array.isArray(data) ? data : [];
-        // TIER-1 #3: client-side name search across group/name/slug
-        if (filterSearch.trim()) {
-          const q = filterSearch.toLowerCase();
-          list = list.filter((p: any) =>
-            (p.name || '').toLowerCase().includes(q) ||
-            (p.slug || '').toLowerCase().includes(q) ||
-            (p.group_name || '').toLowerCase().includes(q)
-          );
-        }
-        setPrinters(list);
+      const params: any = {};
+      if (showHidden) params.include_removed = '1';
+      if (filterGroup) params.group = filterGroup;
+      if (filterTag) params.tag = filterTag;
+      const resp = await printersApi.list(params);
+      let list = Array.isArray(resp.data) ? resp.data : [];
+      // TIER-1 #3: client-side name search across group/name/slug
+      if (filterSearch.trim()) {
+        const q = filterSearch.toLowerCase();
+        list = list.filter((p: any) =>
+          (p.name || '').toLowerCase().includes(q) ||
+          (p.slug || '').toLowerCase().includes(q) ||
+          (p.group_name || '').toLowerCase().includes(q)
+        );
       }
+      setPrinters(list);
     } catch (error) {
       console.error('Failed to fetch printers:', error);
     } finally {
@@ -107,8 +106,8 @@ export default function PrintersPage() {
   const fetchGroupsAndTags = useCallback(async () => {
     try {
       const [g, t] = await Promise.all([
-        fetch('/api/printer-groups', { credentials: 'include' }).then(r => r.ok ? r.json() : []),
-        fetch('/api/printer-groups/tags/all', { credentials: 'include' }).then(r => r.ok ? r.json() : [])
+        api.get('/api/printer-groups').then(r => r.data).catch(() => []),
+        api.get('/api/printer-groups/tags/all').then(r => r.data).catch(() => [])
       ]);
       if (Array.isArray(g)) setGroups(g);
       if (Array.isArray(t)) setAvailableTags(t);
@@ -181,12 +180,7 @@ export default function PrintersPage() {
         payload.customWidthMm = matched.widthMm;
         payload.customHeightMm = matched.heightMm;
       }
-      await fetch(`/api/printers/${printerId}/paper`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify(payload),
-      });
+      await paperApi.setForPrinter(printerId, payload);
       await fetchPrinters();
     } catch (e) {
       console.error('Failed to update paper', e);
@@ -199,10 +193,7 @@ export default function PrintersPage() {
   const handleResetPaper = async (printerId: number) => {
     setSavingPaper(printerId);
     try {
-      await fetch(`/api/printers/${printerId}/paper`, {
-        method: 'DELETE',
-        credentials: 'include',
-      });
+      await paperApi.clearForPrinter(printerId);
       await fetchPrinters();
     } catch (e) {
       console.error('Failed to reset paper', e);
@@ -698,6 +689,19 @@ export default function PrintersPage() {
                       <span style={{ fontSize: '11px', fontFamily: 'Share Tech Mono, monospace', color: 'var(--accent-cyan)', textTransform: 'uppercase' }}>
                         {printer.type}
                       </span>
+                      {printer.client_hostname && (
+                        <span title={`Hosted on node ${printer.client_hostname}${printer.client_ip ? ' (' + printer.client_ip + ')' : ''}`} style={{
+                          display: 'inline-flex', alignItems: 'center', gap: '4px',
+                          marginLeft: '8px', fontSize: '10px',
+                          fontFamily: 'Share Tech Mono, monospace',
+                          padding: '2px 7px', borderRadius: '4px',
+                          background: 'rgba(0, 212, 255, 0.08)',
+                          border: '1px solid rgba(0, 212, 255, 0.25)',
+                          color: 'var(--accent-cyan)', textTransform: 'uppercase', letterSpacing: '0.5px',
+                        }}>
+                          <Monitor size={10} /> {printer.client_hostname}
+                        </span>
+                      )}
                     </div>
                   </div>
                   {isAutoRemoved && (
@@ -928,7 +932,7 @@ export default function PrintersPage() {
                   {isAutoRemoved && (
                     <button
                       onClick={async () => {
-                        await fetch(`/api/printers/${printer.id}/restore`, { method: 'POST', credentials: 'include' });
+                        await printersApi.restore(printer.id);
                         fetchPrinters();
                         fetchHiddenCount();
                       }}
@@ -1053,6 +1057,35 @@ export default function PrintersPage() {
                     <Edit style={{ width: '16px', height: '16px' }} />
                   </button>
 
+                  {/* Paper Config Button */}
+                  <button
+                    onClick={() => setPaperConfigPrinter({ id: printer.id, name: printer.name })}
+                    style={{
+                      width: '36px',
+                      height: '36px',
+                      borderRadius: '8px',
+                      border: '1px solid rgba(0, 212, 255, 0.3)',
+                      background: 'rgba(0, 212, 255, 0.1)',
+                      color: 'var(--accent-cyan)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s'
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = 'rgba(0, 212, 255, 0.2)';
+                      e.currentTarget.style.boxShadow = 'var(--glow-cyan)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = 'rgba(0, 212, 255, 0.1)';
+                      e.currentTarget.style.boxShadow = 'none';
+                    }}
+                    title="Atur ukuran kertas default printer ini"
+                  >
+                    <FileText style={{ width: '16px', height: '16px' }} />
+                  </button>
+
                   {/* Delete Button */}
                   <button
                     onClick={async () => {
@@ -1101,6 +1134,14 @@ export default function PrintersPage() {
         <AddPrinterModal
           onClose={() => setShowAddModal(false)}
           onCreated={() => { fetchPrinters(); fetchHiddenCount(); }}
+        />
+      )}
+
+      {paperConfigPrinter && (
+        <PrinterPaperConfig
+          printerId={paperConfigPrinter.id}
+          printerName={paperConfigPrinter.name}
+          onClose={() => { setPaperConfigPrinter(null); fetchPrinters(); }}
         />
       )}
     </div>

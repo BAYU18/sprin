@@ -77,6 +77,21 @@ export async function setupDownloadsRoutes(fastify: FastifyInstance) {
             .send(fileBuffer);
     });
 
+    // Node Agent Manager — local management menu (status/start/stop/restart/uninstall)
+    const AGENT_MANAGER_PATH = '/root/serverbot/print/printserver/apps/server/public/downloads/manage-agent.bat';
+    fastify.get('/downloads/manage-agent.bat', async (request: FastifyRequest, reply: FastifyReply) => {
+        if (!fs.existsSync(AGENT_MANAGER_PATH)) {
+            return reply.status(404).send({ error: 'Manager script not found' });
+        }
+        const stat = fs.statSync(AGENT_MANAGER_PATH);
+        const fileBuffer = fs.readFileSync(AGENT_MANAGER_PATH);
+        reply
+            .header('Content-Type', 'application/x-msdos-program')
+            .header('Content-Disposition', 'attachment; filename="Manage-PrintServer-Agent.bat"')
+            .header('Content-Length', stat.size)
+            .send(fileBuffer);
+    });
+
     // PowerShell script to bulk-add all printers from server
     const PS_SCRIPT_PATH = '/root/serverbot/print/printserver/docs/add-all-printers.ps1';
     const SNIPPETS_PATH = '/root/serverbot/print/printserver/docs/printer-snippets.txt';
@@ -97,6 +112,26 @@ export async function setupDownloadsRoutes(fastify: FastifyInstance) {
 
     fastify.get('/downloads/add-printers.ps1', serveScript(PS_SCRIPT_PATH, 'add-all-printers.ps1'));
     fastify.get('/downloads/quick-add-universal.ps1', serveScript(PS_UNIVERSAL_PATH, 'quick-add-universal.ps1'));
+
+    // Universal printer installer .bat — fetches the printer catalog, shows a
+    // numbered menu, then installs the chosen printer (auto IPP port + correct
+    // driver + verify). Served straight from disk like the other .bat files.
+    const ADD_PRINTER_BAT = path.join(__dirname, '..', '..', 'public', 'downloads', 'add-printer.bat');
+    fastify.get('/downloads/add-printer.bat', async (request: FastifyRequest, reply: FastifyReply) => {
+        const p = fs.existsSync(ADD_PRINTER_BAT)
+            ? ADD_PRINTER_BAT
+            : '/root/serverbot/print/printserver/apps/server/public/downloads/add-printer.bat';
+        if (!fs.existsSync(p)) {
+            return reply.status(404).send({ error: 'add-printer.bat not found' });
+        }
+        const stat = fs.statSync(p);
+        const fileBuffer = fs.readFileSync(p);
+        reply
+            .header('Content-Type', 'application/x-msdos-program')
+            .header('Content-Disposition', 'attachment; filename="Add-PrintServer-Printer.bat"')
+            .header('Content-Length', stat.size)
+            .send(fileBuffer);
+    });
 
     // Rute Unduhan APK Android
     const ANDROID_APK_PATH = '/root/serverbot/print/printserver/apps/server/public/downloads/printserver.apk';
@@ -127,5 +162,269 @@ export async function setupDownloadsRoutes(fastify: FastifyInstance) {
             .header('Content-Disposition', `attachment; filename="printer-snippets.txt"`)
             .header('Content-Length', stat.size)
             .send(fileBuffer);
+    });
+
+    // Lightweight node-status probe used by the local manage-agent.bat to show a
+    // real "waiting for server" progress bar after Start/Restart. Public (no JWT)
+    // — same trust model as the other /downloads/* agent endpoints. Returns a
+    // tiny JSON the .bat can grep without a JSON parser.
+    // ?hostname=IT-99  →  { "online": true, "secondsAgo": 3, "lastSeen": "..." }
+    fastify.get('/downloads/node-status', async (request: FastifyRequest, reply: FastifyReply) => {
+        const { hostname } = request.query as { hostname?: string };
+        if (!hostname) {
+            return reply.status(400).send({ online: false, error: 'hostname query param required' });
+        }
+        try {
+            const row = await (fastify as any).knex('clients')
+                .whereRaw('LOWER(hostname) = ?', [hostname.toLowerCase()])
+                .orderBy('last_seen', 'desc')
+                .first();
+
+            if (!row || !row.last_seen) {
+                return reply.send({ online: false, registered: !!row, secondsAgo: null, lastSeen: null });
+            }
+            const secondsAgo = Math.max(0, Math.floor((Date.now() - new Date(row.last_seen).getTime()) / 1000));
+            // Online requires BOTH a fresh heartbeat (<=60s) AND the is_online
+            // flag still set. An explicit Stop (node-offline) clears is_online
+            // immediately, so this reports offline right away instead of waiting
+            // up to 60s for the heartbeat to go stale.
+            const online = row.is_online !== false && secondsAgo <= 60;
+            return reply.send({
+                online,
+                registered: true,
+                secondsAgo,
+                lastSeen: new Date(row.last_seen).toISOString(),
+                ip: row.ip_address || null,
+            });
+        } catch (err: any) {
+            return reply.status(500).send({ online: false, error: 'lookup failed' });
+        }
+    });
+
+    // Explicit "I'm shutting down" signal from the local manage-agent.bat Stop
+    // action. A force-killed agent can't report its own offline state, so the
+    // server would otherwise wait up to 60s for the heartbeat to go stale.
+    // This lets the .bat flip the node offline instantly for snappy dashboard
+    // feedback. Public (no JWT) — same trust model as the other agent endpoints.
+    // POST /downloads/node-offline?hostname=IT-99
+    fastify.post('/downloads/node-offline', async (request: FastifyRequest, reply: FastifyReply) => {
+        const { hostname } = request.query as { hostname?: string };
+        if (!hostname) {
+            return reply.status(400).send({ ok: false, error: 'hostname query param required' });
+        }
+        try {
+            const updated = await (fastify as any).knex('clients')
+                .whereRaw('LOWER(hostname) = ?', [hostname.toLowerCase()])
+                .update({ is_online: false, updated_at: new Date() });
+
+            // Notify dashboards in real time so the node flips offline instantly.
+            try {
+                const row = await (fastify as any).knex('clients')
+                    .whereRaw('LOWER(hostname) = ?', [hostname.toLowerCase()])
+                    .first();
+                if (row) (fastify as any).io?.emit('client:offline', { clientId: row.id });
+            } catch { /* socket emit is best-effort */ }
+
+            return reply.send({ ok: updated > 0, offline: true });
+        } catch (err: any) {
+            return reply.status(500).send({ ok: false, error: 'update failed' });
+        }
+    });
+
+    // Public printer catalog consumed by the local add-printer.bat installer.
+    // Returns each shared printer with the data the .bat needs to build a valid
+    // IPP port + Add-Printer call: slug (→ IPP resource path), owning node
+    // hostname, live status, and whether that node is currently online. Plus the
+    // server's own LAN IP/port so the .bat can assemble the full ipp:// URL
+    // without the user hardcoding anything. Public (no JWT) — same trust model
+    // as the other /downloads/* agent endpoints.
+    fastify.get('/downloads/printer-list', async (request: FastifyRequest, reply: FastifyReply) => {
+        try {
+            const STALE_SECONDS = 90;
+            const staleCutoff = Date.now() - STALE_SECONDS * 1000;
+            const rows = await (fastify as any).knex('printers')
+                .leftJoin('clients', 'printers.client_id', 'clients.id')
+                .select(
+                    'printers.name as name',
+                    'printers.slug as slug',
+                    'printers.status as status',
+                    'clients.hostname as node',
+                    'clients.is_online as node_is_online',
+                    'clients.last_seen as node_last_seen',
+                )
+                .whereNotNull('printers.slug')
+                .orderBy('clients.hostname')
+                .orderBy('printers.name');
+
+            // Server LAN IP/port for building ipp:// URLs. Prefer explicit env,
+            // then the request host (only if it's a real LAN IP, not localhost),
+            // then the known server LAN IP. IPP server listens on 631.
+            const hostHeader = request.headers.host ? String(request.headers.host).split(':')[0] : '';
+            const hostIsUsable = hostHeader
+                && hostHeader !== 'localhost'
+                && hostHeader !== '127.0.0.1'
+                && !hostHeader.startsWith('::');
+            const serverIp = process.env.SERVER_LAN_IP
+                || process.env.PUBLIC_IP
+                || (hostIsUsable ? hostHeader : '192.168.1.141');
+            const ippPort = 631;
+
+            const printers = rows.map((r: any) => {
+                const fresh = r.node_last_seen ? new Date(r.node_last_seen).getTime() >= staleCutoff : false;
+                const nodeOnline = r.node_is_online === true && fresh;
+                return {
+                    name: r.name,
+                    slug: r.slug,
+                    status: r.status,
+                    node: r.node || 'unknown',
+                    nodeOnline,
+                    ippUrl: `ipp://${serverIp}:${ippPort}/printers/${r.slug}`,
+                };
+            });
+
+            return reply.send({
+                serverIp,
+                ippPort,
+                driverName: 'Microsoft IPP Class Driver',
+                count: printers.length,
+                printers,
+            });
+        } catch (err: any) {
+            return reply.status(500).send({ error: 'list failed' });
+        }
+    });
+
+    // Per-printer one-click installer .bat, generated on the fly for a specific
+    // printer slug. Everything is hardcoded into the script (name, IPP port,
+    // driver) so there is NO fragile client-side parsing — the client just
+    // double-clicks and the right printer installs. Public (no JWT).
+    // GET /downloads/printer-bat/:slug  → Install-<slug>.bat
+    fastify.get('/downloads/printer-bat/:slug', async (request: FastifyRequest, reply: FastifyReply) => {
+        const { slug } = request.params as { slug: string };
+        if (!slug) {
+            return reply.status(400).send({ error: 'slug required' });
+        }
+        try {
+            const row = await (fastify as any).knex('printers')
+                .leftJoin('clients', 'printers.client_id', 'clients.id')
+                .select(
+                    'printers.name as name',
+                    'printers.slug as slug',
+                    'clients.hostname as node',
+                )
+                .whereRaw('LOWER(printers.slug) = ?', [slug.toLowerCase()])
+                .first();
+
+            if (!row) {
+                return reply.status(404).send({ error: 'printer not found' });
+            }
+
+            // Build the server IP the same way as the catalog endpoint.
+            const hostHeader = request.headers.host ? String(request.headers.host).split(':')[0] : '';
+            const hostIsUsable = hostHeader
+                && hostHeader !== 'localhost'
+                && hostHeader !== '127.0.0.1'
+                && !hostHeader.startsWith('::');
+            const serverIp = process.env.SERVER_LAN_IP
+                || process.env.PUBLIC_IP
+                || (hostIsUsable ? hostHeader : '192.168.1.141');
+            const ippUrl = `ipp://${serverIp}:631/printers/${row.slug}`;
+            const driver = 'Microsoft IPP Class Driver';
+            // Sanitize for safe embedding in the .bat (printer names can contain
+            // spaces/parens — fine inside quotes, but strip CR/LF and % just in case).
+            const safeName = String(row.name).replace(/[\r\n%]/g, '').trim();
+            const httpUrl = ippUrl.replace(/^ipp:/, 'http:');
+
+            const bat = [
+                '@echo off',
+                ':: ============================================================',
+                ':: PrintServer Pro - Pasang Printer (auto-generated)',
+                `:: Printer : ${safeName}`,
+                `:: Node    : ${row.node || 'unknown'}`,
+                `:: Port    : ${ippUrl}`,
+                ':: ============================================================',
+                'setlocal EnableDelayedExpansion',
+                `title Pasang Printer - ${safeName}`,
+                '',
+                `set "PRINTER_NAME=${safeName}"`,
+                `set "IPP_URL=${ippUrl}"`,
+                `set "HTTP_URL=${httpUrl}"`,
+                `set "DRIVER=${driver}"`,
+                '',
+                ':: --- Pastikan hak Administrator ---',
+                'net session >nul 2>&1',
+                'if not !errorLevel! == 0 (',
+                '    echo.',
+                '    echo  [PERLU ADMIN] Klik kanan file ini, pilih "Run as administrator".',
+                '    echo.',
+                '    pause',
+                '    exit /b 1',
+                ')',
+                '',
+                'cls',
+                'echo ==============================================================',
+                'echo   MEMASANG PRINTER',
+                'echo ==============================================================',
+                'echo  Nama   : !PRINTER_NAME!',
+                'echo  Port   : !IPP_URL!',
+                'echo  Driver : !DRIVER!',
+                'echo --------------------------------------------------------------',
+                'echo.',
+                '',
+                'echo  [1/3] Membuat port IPP...',
+                `powershell -NoProfile -Command "if (-not (Get-PrinterPort -Name '!IPP_URL!' -ErrorAction SilentlyContinue)) { Add-PrinterPort -Name '!IPP_URL!' }" >nul 2>&1`,
+                'if !errorLevel! == 0 (echo        [OK] Port siap.) else (echo        [!] Port mungkin sudah ada, lanjut.)',
+                '',
+                'echo  [2/3] Memasang printer...',
+                `powershell -NoProfile -ExecutionPolicy Bypass -Command "$n='!PRINTER_NAME!'; $p='!IPP_URL!'; $d='!DRIVER!'; $fn=$n; $ex=Get-Printer -Name $n -ErrorAction SilentlyContinue; if($ex){ if($ex.PortName -eq $p){ } elseif($ex.PortName -like 'ipp*'){ Remove-Printer -Name $n -ErrorAction SilentlyContinue; Add-Printer -Name $n -DriverName $d -PortName $p } else { $fn=$n+' (PrintServer)'; if(Get-Printer -Name $fn -ErrorAction SilentlyContinue){ if((Get-Printer -Name $fn).PortName -ne $p){ Remove-Printer -Name $fn -ErrorAction SilentlyContinue; Add-Printer -Name $fn -DriverName $d -PortName $p } } else { Add-Printer -Name $fn -DriverName $d -PortName $p } } } else { Add-Printer -Name $n -DriverName $d -PortName $p }; Set-Content -Path ($env:TEMP + '\\ps_printer_name.txt') -Value $fn -NoNewline" 2>%TEMP%\\ps_addprn_err.txt`,
+                'if !errorLevel! == 0 (',
+                '    echo        [OK] Perintah pasang dikirim.',
+                ') else (',
+                '    echo        [GAGAL] Gagal memasang printer.',
+                '    echo.',
+                '    echo  Pesan error:',
+                '    type %TEMP%\\ps_addprn_err.txt 2>nul',
+                '    echo.',
+                '    echo  Alternatif manual ^(GUI^):',
+                '    echo   Settings ^> Printers ^> Add device ^> Add manually ^>',
+                '    echo   "Select a shared printer by name" ^> tempel:',
+                '    echo   !HTTP_URL!',
+                '    echo.',
+                '    pause',
+                '    exit /b 1',
+                ')',
+                '',
+                'echo  [3/3] Verifikasi...',
+                'timeout /t 2 /nobreak >nul',
+                'set "FINAL_NAME=!PRINTER_NAME!"',
+                'if exist "%TEMP%\\ps_printer_name.txt" (for /f "usebackq delims=" %%N in ("%TEMP%\\ps_printer_name.txt") do set "FINAL_NAME=%%N")',
+                `powershell -NoProfile -Command "if (Get-Printer -Name '!FINAL_NAME!' -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }" >nul 2>&1`,
+                'if !errorLevel! == 0 (',
+                '    echo        [OK] Printer terpasang dan terverifikasi.',
+                '    echo.',
+                '    echo  ============================================================',
+                '    echo   [SUKSES] "!FINAL_NAME!" siap dipakai!',
+                '    echo   Coba print test page dari Settings ^> Printers.',
+                '    echo  ============================================================',
+                ') else (',
+                '    echo        [!] Printer tidak ditemukan setelah pemasangan.',
+                '    echo            Coba cek manual di Settings ^> Printers.',
+                ')',
+                'echo.',
+                'pause',
+                'endlocal',
+                'exit /b 0',
+                '',
+            ].join('\r\n');
+
+            const safeFilename = `Install-${row.slug}.bat`.replace(/[^A-Za-z0-9._-]/g, '_');
+            reply
+                .header('Content-Type', 'application/x-msdos-program')
+                .header('Content-Disposition', `attachment; filename="${safeFilename}"`)
+                .header('Content-Length', Buffer.byteLength(bat))
+                .send(bat);
+        } catch (err: any) {
+            return reply.status(500).send({ error: 'generate failed' });
+        }
     });
 }

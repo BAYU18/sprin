@@ -15,7 +15,7 @@ if %errorLevel% == 0 (
     exit /b 1
 )
 
-set SERVER_URL=https://canvas-harvest-out-kings.trycloudflare.com
+set SERVER_URL=http://192.168.1.141:3000
 set TARGET_DIR=%APPDATA%\printserver-agent
 set EXE_PATH=%TARGET_DIR%\printserver-agent.exe
 
@@ -23,7 +23,7 @@ echo [1/4] Creating installation directory at %TARGET_DIR%...
 if not exist "%TARGET_DIR%" mkdir "%TARGET_DIR%"
 
 echo [2/4] Downloading latest agent from server...
-powershell -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri '%SERVER_URL%/api/downloads/agent' -OutFile '%EXE_PATH%'"
+powershell -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri '%SERVER_URL%/downloads/agent' -OutFile '%EXE_PATH%'"
 
 if not exist "%EXE_PATH%" (
     echo ERROR: Failed to download agent executable.

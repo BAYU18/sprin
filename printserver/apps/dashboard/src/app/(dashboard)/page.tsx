@@ -120,16 +120,6 @@ function WifiIcon() {
   );
 }
 
-function DownloadIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor} " strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ width: 18, height: 18 }}>
-      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-      <polyline points="7 10 12 15 17 10" />
-      <line x1="12" y1="15" x2="12" y2="3" />
-    </svg>
-  );
-}
-
 // ─── Count-Up Hook ─────────────────────────────────────────────────────────────
 
 function useCountUp(target: number, duration = 1200) {
@@ -435,7 +425,6 @@ function NetworkTopology({ printers: printerList }: { printers: any[]; clients: 
   const renderBox = (p: any, isOnline: boolean) => {
     const isFlashing = recentlyChanged.indexOf(p.id) !== -1;
     const ippUri = `ipp://192.168.1.141:631/printers/${p.slug || ''}`;
-    const addCmd = `Add-Printer -Name "${p.name}" -DriverName "Generic / Microsoft IPP Class Driver" -PortName "${ippUri}"`;
     return (
       <div
         key={p.id}
@@ -566,10 +555,11 @@ function NetworkTopology({ printers: printerList }: { printers: any[]; clients: 
               </button>
             </div>
 
-            <button
-              onClick={(e) => { e.stopPropagation(); copyToClipboard(addCmd, `ps-${p.id}`); }}
-              data-copy-id={`ps-${p.id}`}
-              title="Copy PowerShell Add-Printer command"
+            <a
+              href={`/downloads/printer-bat/${p.slug || ''}`}
+              download
+              onClick={(e) => { e.stopPropagation(); }}
+              title="Download installer .bat khusus printer ini (auto port + driver)"
               style={{
                 background: 'rgba(0, 255, 136, 0.1)',
                 border: '1px solid rgba(0, 255, 136, 0.35)',
@@ -586,15 +576,17 @@ function NetworkTopology({ printers: printerList }: { printers: any[]; clients: 
                 alignItems: 'center',
                 justifyContent: 'center',
                 gap: 6,
+                textDecoration: 'none',
                 transition: 'all 0.2s ease',
               }}
             >
               <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="4 17 10 11 4 5"></polyline>
-                <line x1="12" y1="19" x2="20" y2="19"></line>
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                <polyline points="7 10 12 15 17 10"></polyline>
+                <line x1="12" y1="15" x2="12" y2="3"></line>
               </svg>
-              Copy Add-Printer Command
-            </button>
+              Download Installer (.bat)
+            </a>
           </div>
         ) : null}
       </div>
@@ -729,15 +721,6 @@ export default function DashboardPage() {
   const [volumeData, setVolumeData] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [isVisible, setIsVisible] = useState(false);
-  const [agentInfo, setAgentInfo] = useState<{version: string, size: number, buildTime: string, downloadUrl: string} | null>(null);
-
-  useEffect(() => {
-    // Fetch live agent build info from server
-    fetch('/downloads/agent/info')
-      .then(r => r.ok ? r.json() : null)
-      .then(info => { if (info) setAgentInfo(info); })
-      .catch(() => {});
-  }, []);
 
   useEffect(() => {
     setIsVisible(true);
@@ -917,77 +900,6 @@ export default function DashboardPage() {
 
       {/* Live Active Server Nodes */}
       {activeNodeList.length > 0 && <ActiveNodeList nodes={activeNodeList} />}
-
-      {/* Download Agent Card */}
-      <div className="download-agent-card" style={{
-        background: 'linear-gradient(135deg, var(--bg-card) 0%, var(--bg-secondary) 100%)',
-        border: '1px solid var(--border)',
-        borderRadius: 16,
-        padding: '24px 32px',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        flexWrap: 'wrap',
-        gap: 16,
-        marginBottom: 28,
-        animation: 'fadeInUp 0.6s ease forwards',
-        animationDelay: '0.15s',
-        opacity: 0,
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-          <div style={{
-            background: 'rgba(0, 212, 255, 0.1)',
-            border: '1px solid rgba(0, 212, 255, 0.3)',
-            borderRadius: 12,
-            padding: 14,
-            display: 'flex',
-            animation: 'float 3s ease-in-out infinite',
-          }}>
-            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="var(--accent-cyan)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-              <polyline points="7 10 12 15 17 10" />
-              <line x1="12" y1="15" x2="12" y2="3" />
-            </svg>
-          </div>
-          <div>
-            <div style={{ fontFamily: 'Share Tech Mono', fontSize: 14, color: 'var(--accent-cyan)', fontWeight: 600 }}>DOWNLOAD AGENT</div>
-            <div style={{ fontFamily: 'Rajdhani', fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
-              {agentInfo ? (
-                <>PrintServer Node Agent <span style={{ color: 'var(--accent-cyan)' }}>v{agentInfo.version}</span> — {(agentInfo.size / 1024 / 1024).toFixed(1)} MB · built {new Date(agentInfo.buildTime).toLocaleDateString('id-ID')}</>
-              ) : (
-                <>PrintServer Node Agent v1.1.0 — Windows 64-bit</>
-              )}
-            </div>
-          </div>
-        </div>
-        <a
-          href="/downloads/agent"
-          download={agentInfo ? `PrintServer-Agent-${agentInfo.version}.exe` : "PrintServer-Agent-1.1.0.exe"}
-          className="btn-primary"
-          style={{
-            background: 'linear-gradient(135deg, var(--accent-cyan) 0%, #00a8cc 100%)',
-            color: '#0a1628',
-            fontFamily: 'Share Tech Mono',
-            fontSize: 13,
-            fontWeight: 600,
-            padding: '12px 24px',
-            borderRadius: 10,
-            textDecoration: 'none',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            cursor: 'pointer',
-            transition: 'all 0.3s ease',
-          }}
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-            <polyline points="7 10 12 15 17 10" />
-            <line x1="12" y1="15" x2="12" y2="3" />
-          </svg>
-          Download .exe
-        </a>
-      </div>
 
       {/* Network Topology */}
       <NetworkTopology printers={printerList} clients={clientList} />

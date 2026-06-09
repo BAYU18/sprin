@@ -21,7 +21,9 @@ import {
   Zap,
   FileText,
   AlertCircle,
-  Loader2
+  Loader2,
+  Settings,
+  Printer as PrinterIcon
 } from 'lucide-react';
 import { format, formatDistanceToNow } from 'date-fns';
 
@@ -357,6 +359,85 @@ export default function ConnectAgentPage() {
                   <Download style={{ width: '18px', height: '18px' }} />
                   Download Agent
                 </a>
+
+                <a
+                  href="/downloads/install-agent.bat"
+                  download
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '8px',
+                    padding: '12px 20px',
+                    textDecoration: 'none',
+                    fontWeight: '600',
+                    fontSize: '14px',
+                    color: 'var(--accent-green)',
+                    background: 'rgba(0, 255, 136, 0.08)',
+                    border: '1px solid rgba(0, 255, 136, 0.35)',
+                    borderRadius: '8px',
+                    transition: 'background-color 0.2s'
+                  }}
+                  title="Installer otomatis — install sebagai Windows service, auto-start saat boot, auto-update"
+                >
+                  <Zap style={{ width: '18px', height: '18px' }} />
+                  Download Installer (.bat)
+                </a>
+
+                <a
+                  href="/downloads/manage-agent.bat"
+                  download
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '8px',
+                    padding: '12px 20px',
+                    textDecoration: 'none',
+                    fontWeight: '600',
+                    fontSize: '14px',
+                    color: 'var(--accent-amber)',
+                    background: 'rgba(245, 158, 11, 0.08)',
+                    border: '1px solid rgba(245, 158, 11, 0.35)',
+                    borderRadius: '8px',
+                    transition: 'background-color 0.2s'
+                  }}
+                  title="Menu kelola agent di komputer lokal — cek status, start, stop, restart, lihat log, nonaktifkan auto-start, atau uninstall"
+                >
+                  <Settings style={{ width: '18px', height: '18px' }} />
+                  Manage Agent (.bat)
+                </a>
+
+                <a
+                  href="/downloads/add-printer.bat"
+                  download
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '8px',
+                    padding: '12px 20px',
+                    textDecoration: 'none',
+                    fontWeight: '600',
+                    fontSize: '14px',
+                    color: 'var(--accent-cyan)',
+                    background: 'rgba(0, 212, 255, 0.08)',
+                    border: '1px solid rgba(0, 212, 255, 0.35)',
+                    borderRadius: '8px',
+                    transition: 'background-color 0.2s'
+                  }}
+                  title="Pasang printer dari server ke komputer ini — menu pilih printer, otomatis bikin port IPP + driver yang benar"
+                >
+                  <PrinterIcon style={{ width: '18px', height: '18px' }} />
+                  Add Printer (.bat)
+                </a>
+
+                <p style={{ fontSize: '11px', color: 'var(--text-muted)', lineHeight: '1.5', marginTop: '-4px' }}>
+                  <strong style={{ color: 'var(--accent-green)' }}>Recommended:</strong> Pakai <code style={{ fontFamily: "'Share Tech Mono', monospace", color: 'var(--accent-cyan)' }}>.bat</code> — klik kanan, <em>Run as administrator</em>. Otomatis download agent, pasang sebagai Windows service (auto-start saat boot + auto-update).
+                </p>
+                <p style={{ fontSize: '11px', color: 'var(--text-muted)', lineHeight: '1.5', marginTop: '-8px' }}>
+                  <strong style={{ color: 'var(--accent-amber)' }}>Manage Agent:</strong> Menu untuk kelola agent di komputer itu sendiri — cek status, <em>start/stop/restart</em>, lihat log, matikan auto-start, atau uninstall. Klik kanan, <em>Run as administrator</em>.
+                </p>
               </>
             ) : (
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--accent-red)' }}>

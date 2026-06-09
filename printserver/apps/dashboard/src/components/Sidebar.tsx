@@ -1,9 +1,10 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState, useRef } from 'react';
 import { badges as badgesApi } from '@/lib/api';
+import { useAuthStore } from '@/lib/store';
 
 interface SidebarProps {
   isOpen?: boolean;
@@ -32,6 +33,13 @@ export default function Sidebar({ isOpen = false, onClose }: SidebarProps) {
   const [counts, setCounts] = useState<BadgeCounts>(EMPTY_BADGES);
   const startTimeRef = useRef(Date.now());
   const pathname = usePathname();
+  const router = useRouter();
+  const { user, logout } = useAuthStore();
+
+  const handleLogout = () => {
+    logout();
+    router.push('/login');
+  };
 
   // Highlight active route — exact match for root, prefix match for nested paths
   const isActive = (href: string) => {
@@ -339,6 +347,27 @@ export default function Sidebar({ isOpen = false, onClose }: SidebarProps) {
         </nav>
 
         <div className="sidebar-footer">
+          {user && (
+            <div className="user-chip">
+              <div className="user-avatar">
+                {(user.full_name || user.username || '?').charAt(0).toUpperCase()}
+              </div>
+              <div className="user-meta">
+                <span className="user-name">{user.full_name || user.username}</span>
+                <span className="user-role">{user.role}</span>
+              </div>
+            </div>
+          )}
+
+          <button type="button" className="logout-btn" onClick={handleLogout}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+              <polyline points="16 17 21 12 16 7"/>
+              <line x1="21" y1="12" x2="9" y2="12"/>
+            </svg>
+            <span>LOGOUT</span>
+          </button>
+
           <div className="server-uptime">
             UPTIME: <span>{uptime}</span>
           </div>

@@ -59,12 +59,13 @@ export const auth = {
 };
 
 export const printers = {
-  list: () => api.get('/api/printers'),
+  list: (params?: any) => api.get('/api/printers', { params }),
   removed: () => api.get('/api/printers/removed'),
   get: (id: number) => api.get(`/api/printers/${id}`),
   create: (data: any) => api.post('/api/printers', data),
   update: (id: number, data: any) => api.put(`/api/printers/${id}`, data),
   delete: (id: number) => api.delete(`/api/printers/${id}`),
+  restore: (id: number) => api.post(`/api/printers/${id}/restore`),
   status: (id: number) => api.get(`/api/printers/${id}/status`),
   jobs: (id: number, params?: any) => api.get(`/api/printers/${id}/jobs`, { params }),
   testPrint: (id: number) => api.post(`/api/printers/${id}/test-print`),
