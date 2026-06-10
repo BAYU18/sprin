@@ -64,7 +64,7 @@ export default function Sidebar({ isOpen = false, onClose }: SidebarProps) {
     return () => clearInterval(interval);
   }, []);
 
-  // Poll sidebar badge counts every 30s. Failures are silent — the sidebar
+  // Poll sidebar badge counts every 60s. Failures are silent — the sidebar
   // is non-essential, never block render on it.
   useEffect(() => {
     let cancelled = false;
@@ -77,7 +77,7 @@ export default function Sidebar({ isOpen = false, onClose }: SidebarProps) {
       }
     };
     fetchBadges();
-    const interval = setInterval(fetchBadges, 30_000);
+    const interval = setInterval(fetchBadges, 60_000);
     return () => {
       cancelled = true;
       clearInterval(interval);

@@ -156,6 +156,13 @@ export async function setupPrintersRoutes(fastify: FastifyInstance) {
                 updated_at: new Date()
             });
 
+        // TIER-2 #4: granular event for restored printer
+        fastify.io?.emit('printer:patch', {
+            id: printerId,
+            status: 'offline',
+            updated_at: new Date()
+        });
+
         // Invalidate printers list cache
         await cache.invalidate(cacheKeys.printersList('default'));
 
@@ -201,7 +208,7 @@ export async function setupPrintersRoutes(fastify: FastifyInstance) {
             return reply.status(404).send({ error: 'Printer not found' });
         }
 
-        fastify.io?.emit('printer:updated', printer);
+        fastify.io?.emit('printer:patch', printer);
 
         // Invalidate printers list cache
         await cache.invalidate(cacheKeys.printersList('default'));
@@ -220,7 +227,8 @@ export async function setupPrintersRoutes(fastify: FastifyInstance) {
             return reply.status(404).send({ error: 'Printer not found' });
         }
 
-        fastify.io?.emit('printer:deleted', { id });
+        // TIER-2 #4: granular event for deleted printer
+        fastify.io?.emit('printer:removed', { id: parseInt(id) });
 
         // Invalidate printers list cache
         await cache.invalidate(cacheKeys.printersList('default'));

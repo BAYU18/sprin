@@ -358,6 +358,16 @@ export async function setupClientsRoutes(fastify: FastifyInstance) {
                     if (wasRemoved) {
                         logger.info(`[Heartbeat] Restored auto-removed printer "${trimmedName}" (id=${existing.id}) — node back online`);
                     }
+
+                    // TIER-2 #4: granular delta event so dashboards can patch
+                    // state in-place instead of refetching the full list.
+                    fastify.io?.emit('printer:patch', {
+                        id: existing.id,
+                        status: updatePayload.status,
+                        port: updatePayload.port,
+                        slug: updatePayload.slug,
+                        updated_at: updatePayload.updated_at
+                    });
                 } else {
                     // Auto-generate a self-describing unique slug for NEW printers:
                     // "<printer-name>-<host-token>" → epson-l3210-series-it99.
@@ -367,7 +377,7 @@ export async function setupClientsRoutes(fastify: FastifyInstance) {
                         fastify.knex,
                         `${generatePrinterSlug(trimmedName)}-${hostToken}`
                     );
-                    await fastify.knex('printers')
+                    const [newId] = await fastify.knex('printers')
                         .insert({
                             name: trimmedName,
                             driver: 'Unknown',
@@ -379,17 +389,45 @@ export async function setupClientsRoutes(fastify: FastifyInstance) {
                             slug,
                             created_at: new Date(),
                             updated_at: new Date()
-                        });
+                        }).returning('id');
+
+                    // TIER-2 #4: granular event for new printer
+                    const newPrinterId = typeof newId === 'object' ? newId?.id : newId;
+                    fastify.io?.emit('printer:created', {
+                        id: newPrinterId,
+                        name: trimmedName,
+                        port: printer.port || 'NODE',
+                        type: 'network',
+                        is_shared: true,
+                        status: status === 'online' ? 'online' : 'offline',
+                        client_id: id,
+                        slug,
+                        created_at: new Date(),
+                        updated_at: new Date()
+                    });
                 }
             }
 
             const printerNames = processedNames;
 
             // Mark printers no longer reported as offline
-            await fastify.knex('printers')
+            const offlineUpdates = await fastify.knex('printers')
                 .where({ client_id: id })
                 .whereNotIn('name', printerNames.map((n: string) => n.trim()))
-                .update({ status: 'offline', updated_at: new Date() });
+                .update({ status: 'offline', updated_at: new Date() })
+                .returning(['id', 'slug']);
+
+            // TIER-2 #4: emit delta for each printer that just went offline so
+            // dashboards can patch in-place. Previously we relied on full-list
+            // re-fetch which caused 600+ req/min during heartbeat storms.
+            for (const row of offlineUpdates) {
+                fastify.io?.emit('printer:patch', {
+                    id: row.id,
+                    status: 'offline',
+                    slug: row.slug,
+                    updated_at: new Date()
+                });
+            }
 
             // TIER-2 #1 FIX: heartbeat just mutated printer status/slug rows, so the
             // cached printers list (printers:list:default, 60s TTL) is now stale.

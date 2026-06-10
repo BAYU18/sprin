@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { printers as printersApi, paper as paperApi, drivers as driversApi } from '@/lib/api';
 import api from '@/lib/api';
 import { on, off } from '@/hooks/useSocket';
@@ -80,7 +80,11 @@ export default function PrintersPage() {
     }
   };
 
+  // TIER-2 #4: in-flight de-dup so concurrent triggers don't stack requests
+  const fetchInFlight = useRef(false);
   const fetchPrinters = useCallback(async () => {
+    if (fetchInFlight.current) return;
+    fetchInFlight.current = true;
     try {
       // Server-side filters only (group/tag/showHidden). Name search is
       // client-side and must NOT be a dependency here, otherwise every
@@ -95,6 +99,7 @@ export default function PrintersPage() {
     } catch (error) {
       console.error('Failed to fetch printers:', error);
     } finally {
+      fetchInFlight.current = false;
       setLoading(false);
     }
   }, [showHidden, filterGroup, filterTag]);
@@ -171,11 +176,38 @@ export default function PrintersPage() {
     } catch (e) { /* silent */ }
   };
 
-  // Stable socket handlers - must use useCallback so effect deps are stable
-  const handlePrinterUpdate = useCallback(() => {
-    fetchPrinters();
+  // TIER-2 #4: in-place patch from granular events (no full re-fetch).
+  // Mirror clients/page.tsx:31-45 pattern. Fallback to re-fetch only when
+  // event has no id (shouldn't happen with new backend, but defensive).
+  const handlePrinterPatch = useCallback((data: any) => {
+    if (!data?.id) {
+      fetchPrinters();
+      return;
+    }
+    setPrinters(prev => prev.map(p => p.id === data.id ? { ...p, ...data } : p));
+  }, []);
+
+  const handlePrinterCreated = useCallback((data: any) => {
+    if (!data?.id) {
+      fetchPrinters();
+      return;
+    }
+    setPrinters(prev => {
+      const exists = prev.some(p => p.id === data.id);
+      if (exists) return prev.map(p => p.id === data.id ? { ...p, ...data } : p);
+      return [...prev, data];
+    });
     fetchHiddenCount();
-  }, [fetchPrinters, fetchHiddenCount]);
+  }, [fetchHiddenCount]);
+
+  const handlePrinterRemoved = useCallback((data: any) => {
+    if (!data?.id) {
+      fetchPrinters();
+      return;
+    }
+    setPrinters(prev => prev.filter(p => p.id !== data.id));
+    fetchHiddenCount();
+  }, [fetchHiddenCount]);
 
   const handleGroupUpdate = useCallback(() => {
     fetchGroupsAndTags();
@@ -188,21 +220,24 @@ export default function PrintersPage() {
     fetchPaperSizes();
     fetchGroupsAndTags();
 
-    on('printer:update', handlePrinterUpdate);
-    on('printer:created', handlePrinterUpdate);
-    on('printer:removed', handlePrinterUpdate);
+    // TIER-2 #4: switch from 'printer:update' (full-list re-fetch trigger)
+    // to granular events ('printer:patch'/'printer:created'/'printer:removed')
+    // so the dashboard doesn't fire /api/printers on every heartbeat.
+    on('printer:patch', handlePrinterPatch);
+    on('printer:created', handlePrinterCreated);
+    on('printer:removed', handlePrinterRemoved);
     on('printer-group:created', handleGroupUpdate);
     on('printer-group:updated', handleGroupUpdate);
     on('printer-group:deleted', handleGroupUpdate);
     return () => {
-      off('printer:update', handlePrinterUpdate);
-      off('printer:created', handlePrinterUpdate);
-      off('printer:removed', handlePrinterUpdate);
+      off('printer:patch', handlePrinterPatch);
+      off('printer:created', handlePrinterCreated);
+      off('printer:removed', handlePrinterRemoved);
       off('printer-group:created', handleGroupUpdate);
       off('printer-group:updated', handleGroupUpdate);
       off('printer-group:deleted', handleGroupUpdate);
     };
-  }, [fetchPrinters, fetchGroupsAndTags, handlePrinterUpdate, handleGroupUpdate]);
+  }, [fetchPrinters, fetchGroupsAndTags, handlePrinterPatch, handlePrinterCreated, handlePrinterRemoved, handleGroupUpdate]);
 
   // When showHidden toggles, re-fetch
   useEffect(() => {
