@@ -316,6 +316,14 @@ export async function setupPrintersRoutes(fastify: FastifyInstance) {
             updated_at: new Date()
         });
 
+        // Invalidate printers list cache + emit event
+        await cache.invalidate(cacheKeys.printersList('default'));
+        fastify.io?.emit('printer:patch', {
+            id: printerId,
+            config: newConfig,
+            updated_at: new Date()
+        });
+
         // Return effective resolved config (so caller can see what will actually be used)
         const effective = await resolvePaperForPrinter(fastify.knex, printerId);
 
@@ -338,6 +346,14 @@ export async function setupPrintersRoutes(fastify: FastifyInstance) {
                 config: Object.keys(currentConfig).length ? currentConfig : null,
                 updated_at: new Date()
             });
+
+        // Invalidate printers list cache + emit event
+        await cache.invalidate(cacheKeys.printersList('default'));
+        fastify.io?.emit('printer:patch', {
+            id: printerId,
+            config: Object.keys(currentConfig).length ? currentConfig : null,
+            updated_at: new Date()
+        });
 
         const effective = await resolvePaperForPrinter(fastify.knex, printerId);
         return { override: null, effective };

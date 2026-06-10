@@ -46,6 +46,7 @@ export default function PrintersPage() {
   const [paperDropdown, setPaperDropdown] = useState<number | null>(null);
   // Track saving state per printer
   const [savingPaper, setSavingPaper] = useState<number | null>(null);
+  const [paperSearch, setPaperSearch] = useState('');
   const [actionLoading, setActionLoading] = useState<Record<string, boolean>>({});
   // TIER-1 #3: Group & tag filter state
   const [groups, setGroups] = useState<PrinterGroup[]>([]);
@@ -972,7 +973,7 @@ export default function PrintersPage() {
                     
                     <div style={{ position: 'relative' }} data-paper-dropdown>
                       <button
-                        onClick={(e) => { e.stopPropagation(); setPaperDropdown(isDropdownOpen ? null : printer.id); }}
+                        onClick={(e) => { e.stopPropagation(); const next = !isDropdownOpen; setPaperDropdown(next ? printer.id : null); if (next) setPaperSearch(''); }}
                         disabled={isSaving}
                         style={{
                           display: 'inline-flex',
@@ -1017,21 +1018,41 @@ export default function PrintersPage() {
                             right: 0,
                             top: '32px',
                             zIndex: 100,
-                            width: '240px',
-                            maxHeight: '260px',
+                            width: '260px',
+                            maxHeight: '320px',
                             overflowY: 'auto',
                             padding: '8px 0',
                             display: 'flex',
                             flexDirection: 'column'
                           }}
+                          onClick={(e) => e.stopPropagation()}
                         >
                           <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                            <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                              Select Paper Size
-                            </span>
+                            {/* Search input */}
+                            <div style={{ position: 'relative' }}>
+                              <Search style={{ position: 'absolute', left: '8px', top: '50%', transform: 'translateY(-50%)', width: '13px', height: '13px', color: 'var(--text-muted)' }} />
+                              <input
+                                autoFocus
+                                type="text"
+                                placeholder="Search paper size…"
+                                value={paperSearch}
+                                onChange={(e) => setPaperSearch(e.target.value)}
+                                style={{
+                                  width: '100%',
+                                  padding: '6px 8px 6px 28px',
+                                  fontSize: '12px',
+                                  background: 'rgba(0,0,0,0.3)',
+                                  border: '1px solid var(--border)',
+                                  borderRadius: '6px',
+                                  color: 'var(--text-primary)',
+                                  outline: 'none',
+                                }}
+                                onKeyDown={(e) => { if (e.key === 'Escape') { setPaperDropdown(null); setPaperSearch(''); } }}
+                              />
+                            </div>
                             {currentPaper && (
                               <button
-                                onClick={() => handleResetPaper(printer.id)}
+                                onClick={(e) => { e.stopPropagation(); handleResetPaper(printer.id); }}
                                 style={{
                                   background: 'transparent',
                                   border: 'none',
@@ -1051,44 +1072,54 @@ export default function PrintersPage() {
                             )}
                           </div>
                           <div style={{ display: 'flex', flexDirection: 'column' }}>
-                            {paperSizes.map((size) => (
-                              <button
-                                key={size.name}
-                                onClick={() => handlePaperChange(printer.id, size.name)}
-                                style={{
-                                  width: '100%',
-                                  textAlign: 'left',
-                                  padding: '8px 12px',
-                                  fontSize: '13px',
-                                  background: effectivePaper === size.name ? 'rgba(0, 212, 255, 0.08)' : 'transparent',
-                                  border: 'none',
-                                  color: effectivePaper === size.name ? 'var(--accent-cyan)' : 'var(--text-primary)',
-                                  cursor: 'pointer',
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  justifyContent: 'space-between',
-                                  transition: 'all 0.2s'
-                                }}
-                                onMouseEnter={(e) => {
-                                  e.currentTarget.style.background = 'var(--bg-hover)';
-                                }}
-                                onMouseLeave={(e) => {
-                                  e.currentTarget.style.background = effectivePaper === size.name ? 'rgba(0, 212, 255, 0.08)' : 'transparent';
-                                }}
-                              >
-                                <span style={{ fontWeight: effectivePaper === size.name ? 600 : 400 }}>
-                                  {size.name}
-                                  {!size.builtin && (
-                                    <span style={{ marginLeft: '6px', fontSize: '10px', color: 'var(--accent-amber)', fontWeight: 'bold' }}>
-                                      [custom]
-                                    </span>
-                                  )}
-                                </span>
-                                <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'Share Tech Mono, monospace' }}>
-                                  {size.widthMm}×{size.heightMm}mm
-                                </span>
-                              </button>
-                            ))}
+                            {(() => {
+                              const q = paperSearch.toLowerCase().trim();
+                              const filtered = q
+                                ? paperSizes.filter(s => s.name.toLowerCase().includes(q) || `${s.widthMm}×${s.heightMm}`.includes(q))
+                                : paperSizes;
+                              return filtered.length > 0 ? filtered.map((size) => (
+                                <button
+                                  key={size.name}
+                                  onClick={(e) => { e.stopPropagation(); handlePaperChange(printer.id, size.name); }}
+                                  style={{
+                                    width: '100%',
+                                    textAlign: 'left',
+                                    padding: '8px 12px',
+                                    fontSize: '13px',
+                                    background: effectivePaper === size.name ? 'rgba(0, 212, 255, 0.08)' : 'transparent',
+                                    border: 'none',
+                                    color: effectivePaper === size.name ? 'var(--accent-cyan)' : 'var(--text-primary)',
+                                    cursor: 'pointer',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'space-between',
+                                    transition: 'all 0.2s'
+                                  }}
+                                  onMouseEnter={(e) => {
+                                    e.currentTarget.style.background = 'var(--bg-hover)';
+                                  }}
+                                  onMouseLeave={(e) => {
+                                    e.currentTarget.style.background = effectivePaper === size.name ? 'rgba(0, 212, 255, 0.08)' : 'transparent';
+                                  }}
+                                >
+                                  <span style={{ fontWeight: effectivePaper === size.name ? 600 : 400 }}>
+                                    {size.name}
+                                    {!size.builtin && (
+                                      <span style={{ marginLeft: '6px', fontSize: '10px', color: 'var(--accent-amber)', fontWeight: 'bold' }}>
+                                        [custom]
+                                      </span>
+                                    )}
+                                  </span>
+                                  <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'Share Tech Mono, monospace' }}>
+                                    {size.widthMm}×{size.heightMm}mm
+                                  </span>
+                                </button>
+                              )) : (
+                                <div style={{ padding: '16px 12px', fontSize: '12px', color: 'var(--text-muted)', textAlign: 'center' }}>
+                                  No match for "{paperSearch}"
+                                </div>
+                              );
+                            })()}
                             {paperSizes.length === 0 && (
                               <div style={{ padding: '16px 12px', fontSize: '12px', color: 'var(--text-muted)', textAlign: 'center' }}>
                                 No paper sizes. Add in Settings → Print Defaults.
