@@ -154,11 +154,20 @@ export class IPPServer {
             const headers = this.parseHttpHeaders(headerText);
             const bodyStart = headerEnd + 4;
 
-            // If Content-Length present, ensure we have full body
+            // If Content-Length present, ensure we have full body; otherwise
+            // treat everything after the headers as the body (some IPP clients
+            // — notably the Windows IPP Class Driver — omit Content-Length).
             const contentLength = parseInt(headers['content-length'] || '0', 10);
-            if (buffer.length < bodyStart + contentLength) return;
+            const hasContentLength = 'content-length' in headers;
+            if (hasContentLength && buffer.length < bodyStart + contentLength) return;
 
-            const body = buffer.slice(bodyStart, bodyStart + contentLength);
+            const bodyEnd = hasContentLength ? bodyStart + contentLength : buffer.length;
+            const body = buffer.slice(bodyStart, bodyEnd);
+            if (body.length === 0) {
+                logger.warn(`[IPP] ${peer} sent empty body (headers only), ignoring`);
+                this.sendHttpError(socket, 400, 'Bad Request: empty IPP body');
+                return;
+            }
             logger.info(`[IPP] ${peer} body.length=${body.length} declared content-length=${contentLength} first32hex=${body.slice(0, 32).toString('hex')}`);
             this.handleRequest(socket, headers, body, peer);
         });
@@ -281,6 +290,10 @@ export class IPPServer {
             encoder.addAttr('printer-attributes-tag', SYNTAX.KEYWORD, 'printer-location', (printer as any).client_ip || '');
             encoder.addAttr('printer-attributes-tag', SYNTAX.ENUM, 'printer-state', printer.status === 'online' ? 3 : 5);
             encoder.addAttr('printer-attributes-tag', SYNTAX.ENUM, 'printer-is-accepting-jobs', 1);
+            // printer-state-reasons: required by Windows IPP Class Driver to
+            // determine printer availability.  'none' = ready; without this
+            // attribute Windows treats the printer as unknown/unavailable.
+            encoder.addAttr('printer-attributes-tag', SYNTAX.KEYWORD, 'printer-state-reasons', 'none');
             encoder.addAttr('printer-attributes-tag', SYNTAX.KEYWORD, 'document-format-default', 'application/octet-stream');
             encoder.addAttr('printer-attributes-tag', SYNTAX.KEYWORD, 'document-format-supported', 'application/octet-stream');
             encoder.addAttr('printer-attributes-tag', SYNTAX.KEYWORD, 'document-format-supported', 'application/postscript');
