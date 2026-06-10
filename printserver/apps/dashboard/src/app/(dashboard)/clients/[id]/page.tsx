@@ -62,7 +62,8 @@ export default function ClientDetailPage() {
     on('client:online', hb);
     on('client:offline', hb);
     on('printer:patch', handlePrinterPatch);
-    on('printer:created', () => fetchDetail());
+    const handlePrinterCreated = () => fetchDetail();
+    on('printer:created', handlePrinterCreated);
 
     // WS-fallback polling (15s) — only when socket is disconnected.
     const wsFallback = (getSocket() as any);
@@ -78,7 +79,7 @@ export default function ClientDetailPage() {
       if (refresh) clearInterval(refresh);
       off('client:heartbeat', hb); off('client:online', hb); off('client:offline', hb);
       off('printer:patch', handlePrinterPatch);
-      off('printer:created', () => fetchDetail());
+      off('printer:created', handlePrinterCreated);
       wsFallback?.off?.('disconnect', onDisconnect);
       wsFallback?.off?.('connect', onConnect);
     };

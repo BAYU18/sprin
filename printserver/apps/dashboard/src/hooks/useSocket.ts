@@ -17,6 +17,10 @@ export function useSocket() {
         reconnection: true,
         reconnectionAttempts: 10
       });
+      // Socket.IO reconnection can accumulate internal 'close' listeners on
+      // the underlying transport. Increase the limit to avoid
+      // MaxListenersExceededWarning while keeping the actual leak guard active.
+      socket.setMaxListeners?.(20);
 
       socket.on('connect', () => {
         setConnected(true);

@@ -877,9 +877,18 @@ export default function PrintersPage() {
                       }} />
                     </div>
                     <div>
-                      <h3 style={{ fontSize: '18px', fontWeight: 700, fontFamily: 'Rajdhani, sans-serif', color: 'var(--text-primary)', margin: 0, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                        {printer.name}
-                      </h3>
+                      <Link
+                        href={`/printers/${printer.id}`}
+                        onClick={(e) => e.stopPropagation()}
+                        style={{ textDecoration: 'none' }}
+                      >
+                        <h3 style={{ fontSize: '18px', fontWeight: 700, fontFamily: 'Rajdhani, sans-serif', color: 'var(--text-primary)', margin: 0, textTransform: 'uppercase', letterSpacing: '0.5px', cursor: 'pointer', transition: 'color 0.2s' }}
+                          onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--accent-cyan)'; }}
+                          onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--text-primary)'; }}
+                        >
+                          {printer.name}
+                        </h3>
+                      </Link>
                       <span style={{ fontSize: '11px', fontFamily: 'Share Tech Mono, monospace', color: 'var(--accent-cyan)', textTransform: 'uppercase' }}>
                         {printer.type}
                       </span>

@@ -100,7 +100,19 @@ export async function setupPrintersRoutes(fastify: FastifyInstance) {
         const { id } = request.params as { id: string };
 
         const printer = await fastify.knex('printers')
-            .where({ id })
+            .leftJoin('printer_groups', 'printers.group_id', 'printer_groups.id')
+            .leftJoin('clients', 'printers.client_id', 'clients.id')
+            .leftJoin('printer_drivers', 'printers.driver_id', 'printer_drivers.id')
+            .select(
+                'printers.*',
+                'printer_groups.name as group_name',
+                'clients.hostname as client_hostname',
+                'clients.ip_address as client_ip',
+                'printer_drivers.name as driver_name',
+                'printer_drivers.manufacturer as driver_manufacturer',
+                'printer_drivers.is_builtin as driver_is_builtin'
+            )
+            .where('printers.id', id)
             .first();
 
         if (!printer) {
