@@ -163,9 +163,15 @@ export class IPPServer {
 
             const bodyEnd = hasContentLength ? bodyStart + contentLength : buffer.length;
             const body = buffer.slice(bodyStart, bodyEnd);
-            if (body.length === 0) {
+            const method = headers['method'] || 'POST';
+            if (body.length === 0 && method === 'POST') {
                 logger.warn(`[IPP] ${peer} sent empty body (headers only), ignoring`);
                 this.sendHttpError(socket, 400, 'Bad Request: empty IPP body');
+                return;
+            }
+            // GET/HEAD with no body → forward to handleRequest for discovery
+            if (body.length === 0 && (method === 'GET' || method === 'HEAD')) {
+                this.handleRequest(socket, headers, body, peer);
                 return;
             }
             logger.info(`[IPP] ${peer} body.length=${body.length} declared content-length=${contentLength} first32hex=${body.slice(0, 32).toString('hex')}`);
@@ -180,6 +186,11 @@ export class IPPServer {
     private parseHttpHeaders(text: string): Record<string, string> {
         const lines = text.split('\r\n');
         const headers: Record<string, string> = {};
+        // Line 0 is the request line: "METHOD /path HTTP/1.1" — extract method
+        if (lines[0]) {
+            const parts = lines[0].split(' ');
+            if (parts.length >= 1) headers['method'] = parts[0].toUpperCase();
+        }
         for (let i = 1; i < lines.length; i++) {
             const idx = lines[i].indexOf(':');
             if (idx > 0) {
@@ -194,8 +205,29 @@ export class IPPServer {
     // ── Request handler ─────────────────────────────────────────────────────
 
     private async handleRequest(socket: net.Socket, headers: Record<string, string>, body: Buffer, peer: string) {
-        // IPP comes over HTTP/1.1 POST with content-type "application/ipp"
-        if (headers['content-type'] !== 'application/ipp') {
+        // Windows IPP wizard sends GET/HEAD first for discovery — respond with
+        // a simple HTML page so the wizard knows this is a valid printer endpoint.
+        const method = (headers as any)['method'] || (headers as any)[':method'] || 'POST';
+        if (method === 'GET' || method === 'HEAD') {
+            const html = `<!DOCTYPE html><html><head><title>PrintServer Pro IPP</title></head><body><h1>PrintServer Pro IPP Server</h1><p>This endpoint accepts IPP protocol requests (POST with Content-Type: application/ipp).</p></body></html>`;
+            const resp = [
+                'HTTP/1.1 200 OK',
+                'Content-Type: text/html; charset=utf-8',
+                `Content-Length: ${Buffer.byteLength(html)}`,
+                'Connection: close',
+                '',
+                html,
+            ].join('\r\n');
+            socket.write(resp);
+            socket.end();
+            return;
+        }
+
+        // IPP comes over HTTP/1.1 POST with content-type "application/ipp".
+        // Some clients (Windows IPP Class Driver) omit Content-Type — if we
+        // have a body, try to parse it as IPP anyway.
+        const ct = headers['content-type'] || '';
+        if (ct && ct !== 'application/ipp') {
             this.sendHttpError(socket, 415, 'Content-Type must be application/ipp');
             return;
         }

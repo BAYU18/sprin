@@ -335,7 +335,11 @@ export async function setupDownloadsRoutes(fastify: FastifyInstance) {
                 || process.env.PUBLIC_IP
                 || (hostIsUsable ? hostHeader : '192.168.1.141');
             const ippUrl = `ipp://${serverIp}:631/printers/${row.slug}`;
-            const driver = 'Microsoft IPP Class Driver';
+            // Driver priority: match exact printer model from database driver
+            // field → fallback to generic IPP class driver.  Nodes should
+            // register their driver name (e.g. "EPSON LX-310 ESC/P") so the
+            // .bat can use the exact matching driver on the client PC.
+            const driver = (row.driver && String(row.driver).trim()) || 'Microsoft IPP Class Driver';
             // Sanitize for safe embedding in the .bat (printer names can contain
             // spaces/parens — fine inside quotes, but strip CR/LF, %, and /
             // (forward-slash breaks Windows Print Spooler name resolution).
