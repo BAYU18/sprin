@@ -396,10 +396,30 @@ class JobExecutor {
   }
 
   async execute(job) {
-    logger.info('Executing print job', { jobId: job.id, printer: job.printer, file: job.filePath });
+    logger.info('Executing print job', { jobId: job.id, printer: job.printer, file: job.filePath, fileType: job.fileType });
 
     try {
       const paper = job.paper || null; // { size, orientation, tray, customWidthMm, customHeightMm }
+
+      // ── Raw TCP data: send bytes directly to printer via Out-Printer ──
+      // Raw ESC/P data from Windows TCP/IP port can't be opened with Start-Process.
+      // We pipe the raw content through Out-Printer which sends it to the
+      // Windows print queue (the driver translates to ESC/P already).
+      if (job.fileType === 'raw' || (job.filePath && job.filePath.endsWith('.raw'))) {
+        const psCmd = [
+          `$content = [System.IO.File]::ReadAllBytes('${job.filePath.replace(/'/g, "''")}')`,
+          `$printer = Get-Printer | Where-Object { $_.Name -eq '${(job.printer || '').replace(/'/g, "''")}' }`,
+          `if ($printer) {`,
+          `  $bytes = [System.IO.File]::ReadAllBytes('${job.filePath.replace(/'/g, "''")}')`,
+          `  # Write raw bytes to printer port via .NET RawPrint or Out-Printer`,
+          `  $tempText = [System.Text.Encoding]::Default.GetString($bytes)`,
+          `  $tempText | Out-Printer -Name '${(job.printer || '').replace(/'/g, "''")}'`,
+          `} else { Write-Error "Printer '${(job.printer || '').replace(/'/g, "''")}' not found" }`,
+        ].join('\r\n');
+        await execPS(psCmd);
+        logger.info('Job sent via raw→Out-Printer', { jobId: job.id, printer: job.printer });
+        return { success: true, method: 'raw-out-printer' };
+      }
 
       // Try SumatraPDF first (best for silent printing). SumatraPDF only
       // supports predefined paper names (A4/Letter/etc) — for custom sizes

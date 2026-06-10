@@ -547,6 +547,7 @@ export class IPPServer {
                 .returning(['id']);
 
             const result = await this.forwardToAgent(printer.client_id, {
+                jobId: job.id,
                 action: 'print',
                 printerName: printer.name,
                 fileName,
