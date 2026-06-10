@@ -141,14 +141,37 @@ export class IPPServer {
 
     private handleConnection(socket: net.Socket) {
         let buffer = Buffer.alloc(0);
+        let headerCheckDone = false;
         const peer = `${socket.remoteAddress}:${socket.remotePort}`;
+
+        // Timeout: if no \r\n\r\n within 2s, treat as raw (non-IPP) print data.
+        // This handles Windows TCP/IP port (RAW protocol) connections.
+        const rawTimeout = setTimeout(() => {
+            if (!headerCheckDone && buffer.length > 0) {
+                headerCheckDone = true;
+                logger.info(`[IPP] ${peer} raw data (${buffer.length} bytes, no HTTP headers) — treating as direct print job`);
+                this.handleRawPrint(socket, buffer, peer);
+            }
+        }, 2000);
 
         socket.on('data', (chunk) => {
             buffer = Buffer.concat([buffer, chunk]);
 
             // Try to parse HTTP request. Wait for \r\n\r\n or end of headers
             const headerEnd = buffer.indexOf('\r\n\r\n');
-            if (headerEnd === -1) return;
+            if (headerEnd === -1) {
+                // If buffer is large (>8KB) without headers, it's definitely raw data
+                if (buffer.length > 8192 && !headerCheckDone) {
+                    headerCheckDone = true;
+                    clearTimeout(rawTimeout);
+                    logger.info(`[IPP] ${peer} large buffer (${buffer.length} bytes) without HTTP headers — treating as raw print`);
+                    this.handleRawPrint(socket, buffer, peer);
+                }
+                return;
+            }
+            if (headerCheckDone) return;
+            headerCheckDone = true;
+            clearTimeout(rawTimeout);
 
             const headerText = buffer.slice(0, headerEnd).toString('utf8');
             const headers = this.parseHttpHeaders(headerText);
@@ -456,6 +479,77 @@ export class IPPServer {
     private async handlePrintURI(req: any, rawBody: Buffer): Promise<Buffer> {
         // Print-URI is a reference to a URL — for our purposes we just accept and route
         return this.handlePrintJob(req, rawBody);
+    }
+
+    // ── Raw TCP print handler (Windows TCP/IP port / RAW protocol) ────────
+
+    private async handleRawPrint(socket: net.Socket, data: Buffer, peer: string) {
+        // Raw TCP data from Windows TCP/IP port — no IPP framing.
+        // Route to the first online printer (best-effort).
+        try {
+            const knex = this.getKnex();
+            const printers = await knex('printers')
+                .leftJoin('clients', 'printers.client_id', 'clients.id')
+                .select('printers.*', 'clients.ip_address as client_ip')
+                .where('printers.status', 'online')
+                .whereNotNull('printers.client_id')
+                .limit(1);
+
+            if (!printers.length) {
+                logger.warn(`[RAW] ${peer} — no online printers available`);
+                socket.end();
+                return;
+            }
+
+            const printer = printers[0];
+            const fileName = `raw-${Date.now()}`;
+            const base64Data = data.toString('base64');
+
+            logger.info(`[RAW] ${peer} → printer=${printer.name} (id=${printer.id}, client=${printer.client_id}) bytes=${data.length}`);
+
+            // Insert job
+            const [job] = await knex('print_jobs')
+                .insert({
+                    user_id: 1,
+                    client_id: printer.client_id,
+                    printer_id: printer.id,
+                    job_name: fileName,
+                    file_name: fileName,
+                    file_path: 'raw-tcp',
+                    file_type: 'raw',
+                    file_size: data.length,
+                    paper_size: 'Default',
+                    copies: 1,
+                    status: 'processing',
+                    priority: 'normal',
+                    source_app: 'raw-tcp',
+                    started_at: new Date()
+                })
+                .returning(['id']);
+
+            const result = await this.forwardToAgent(printer.client_id, {
+                action: 'print',
+                printerName: printer.name,
+                fileName,
+                copies: 1,
+                fileType: 'raw',
+                fileData: base64Data,
+                paper: null,
+            });
+
+            await knex('print_jobs')
+                .where({ id: job.id })
+                .update({
+                    status: result.success ? 'completed' : 'failed',
+                    error_message: result.success ? null : result.error,
+                    completed_at: new Date()
+                });
+
+            logger.info(`[RAW] ${peer} → job ${job.id} ${result.success ? 'OK' : 'FAILED: ' + result.error}`);
+        } catch (err) {
+            logger.error(`[RAW] ${peer} error: ${(err as Error).message}`);
+        }
+        socket.end();
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────────
