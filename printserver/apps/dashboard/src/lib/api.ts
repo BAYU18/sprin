@@ -4,7 +4,7 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || '';
 
 const api = axios.create({
   baseURL: API_URL || undefined,
-  timeout: 15000,
+  timeout: 8000,
   headers: {
     'Content-Type': 'application/json'
   }

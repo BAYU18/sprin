@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { clients as clientsApi } from '@/lib/api';
-import { on, off } from '@/hooks/useSocket';
+import { on, off, getSocket } from '@/hooks/useSocket';
 import {
   ArrowLeft, Wifi, WifiOff, Cpu, Server, Printer, FileText, Clock,
   CheckCircle2, XCircle, Loader2, RefreshCw, Network, HardDrive, Hash, Activity
@@ -36,14 +36,51 @@ export default function ClientDetailPage() {
     if (!Number.isFinite(id)) { setNotFound(true); setLoading(false); return; }
     fetchDetail();
     const t = setInterval(() => setNow(Date.now()), 1000);
-    const refresh = setInterval(fetchDetail, 15000);
-    const hb = (d: any) => { if (d.clientId === id) fetchDetail(); };
+
+    // TIER-2 #4: replace 15s polling with socket-driven updates.
+    // The heartbeat event includes fresh data so we patch in-place;
+    // printer:patch updates the embedded printer list without a re-fetch.
+    const hb = (d: any) => {
+      if (d?.clientId !== id) return;
+      // Heartbeat payload is shallow — we still need to re-fetch to get fresh
+      // last_seen / metadata, but only ON event (not periodic).
+      if (d.status !== undefined) {
+        // Quick status patch; full refresh below for accuracy.
+        setData((prev: any) => prev ? { ...prev, is_online: d.status !== 'offline' } : prev);
+      }
+      fetchDetail();
+    };
+    const handlePrinterPatch = (d: any) => {
+      if (!d?.id) return;
+      setData((prev: any) => {
+        if (!prev) return prev;
+        const printers = (prev.printers || []).map((p: any) => p.id === d.id ? { ...p, ...d } : p);
+        return { ...prev, printers };
+      });
+    };
     on('client:heartbeat', hb);
     on('client:online', hb);
     on('client:offline', hb);
+    on('printer:patch', handlePrinterPatch);
+    on('printer:created', () => fetchDetail());
+
+    // WS-fallback polling (15s) — only when socket is disconnected.
+    const wsFallback = (getSocket() as any);
+    let refresh: any = null;
+    const onDisconnect = () => { refresh = setInterval(fetchDetail, 15000); };
+    const onConnect = () => { if (refresh) { clearInterval(refresh); refresh = null; } };
+    if (wsFallback && !wsFallback.connected) onDisconnect();
+    wsFallback?.on?.('disconnect', onDisconnect);
+    wsFallback?.on?.('connect', onConnect);
+
     return () => {
-      clearInterval(t); clearInterval(refresh);
+      clearInterval(t);
+      if (refresh) clearInterval(refresh);
       off('client:heartbeat', hb); off('client:online', hb); off('client:offline', hb);
+      off('printer:patch', handlePrinterPatch);
+      off('printer:created', () => fetchDetail());
+      wsFallback?.off?.('disconnect', onDisconnect);
+      wsFallback?.off?.('connect', onConnect);
     };
   }, [id, fetchDetail]);
 

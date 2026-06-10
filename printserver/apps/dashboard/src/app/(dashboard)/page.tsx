@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef } from 'react';
 import { jobs as jobsApi, printers, clients, analytics as analyticsApi } from '@/lib/api';
-import { on, off } from '@/hooks/useSocket';
+import { on, off, getSocket } from '@/hooks/useSocket';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell,
   AreaChart, Area
@@ -368,16 +368,55 @@ export default function DashboardPage() {
 
   useEffect(() => {
     fetchData();
-    const interval = setInterval(fetchData, 30000);
 
+    // TIER-2 #4: replace periodic polling with socket-driven updates. Job
+    // events trigger targeted fetchData; printer/client patches update stats
+    // cards in-place. Re-fetch is only needed if WS dies for >5s.
     const handleJobUpdate = () => fetchData();
+    const handlePrinterPatch = (data: any) => {
+      // Patch printer list and stats counters without a full refetch.
+      if (data?.id) {
+        setPrinterList((prev: any[]) => prev.map(p => p.id === data.id ? { ...p, ...data } : p));
+      }
+    };
+    const handleClientUpdate = (data: any) => {
+      // Heartbeat / online / offline — just mark is_online.
+      if (data?.clientId !== undefined) {
+        const isOnline = data.status !== 'offline';
+        setClientList((prev: any[]) => prev.map(c => c.id === data.clientId ? { ...c, is_online: isOnline } : c));
+      }
+    };
     on('job:new', handleJobUpdate);
     on('job:complete', handleJobUpdate);
+    on('printer:patch', handlePrinterPatch);
+    on('client:heartbeat', handleClientUpdate);
+    on('client:online', handleClientUpdate);
+    on('client:offline', handleClientUpdate);
+
+    // TIER-2 #4: WS-fallback polling — only active when socket is disconnected
+    // for >5s. Otherwise rely on event-driven updates.
+    const wsFallback = (getSocket() as any);
+    let interval: any = null;
+    const onDisconnect = () => {
+      interval = setInterval(fetchData, 30000);
+    };
+    const onConnect = () => {
+      if (interval) { clearInterval(interval); interval = null; }
+    };
+    if (wsFallback && !wsFallback.connected) onDisconnect();
+    wsFallback?.on?.('disconnect', onDisconnect);
+    wsFallback?.on?.('connect', onConnect);
 
     return () => {
-      clearInterval(interval);
+      if (interval) clearInterval(interval);
       off('job:new', handleJobUpdate);
       off('job:complete', handleJobUpdate);
+      off('printer:patch', handlePrinterPatch);
+      off('client:heartbeat', handleClientUpdate);
+      off('client:online', handleClientUpdate);
+      off('client:offline', handleClientUpdate);
+      wsFallback?.off?.('disconnect', onDisconnect);
+      wsFallback?.off?.('connect', onConnect);
     };
   }, []);
 

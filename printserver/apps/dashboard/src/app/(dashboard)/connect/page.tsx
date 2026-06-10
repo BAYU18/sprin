@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { settings, nodes as nodesApi } from '@/lib/api';
+import { on, off, getSocket } from '@/hooks/useSocket';
 import {
   Bot,
   Download,
@@ -158,8 +159,31 @@ export default function ConnectAgentPage() {
     fetchAgentInfo();
     fetchNodes();
     fetchServerInfo();
-    const interval = setInterval(fetchNodes, 15000);
-    return () => clearInterval(interval);
+
+    // TIER-2 #4: replace periodic polling with socket-driven updates.
+    // nodes/list endpoint is heavy; only refetch on real changes.
+    const handleNodeChange = () => fetchNodes();
+    on('client:online', handleNodeChange);
+    on('client:offline', handleNodeChange);
+    on('client:heartbeat', handleNodeChange);
+
+    // WS-fallback polling (15s) only when disconnected.
+    const wsFallback = (getSocket() as any);
+    let interval: any = null;
+    const onDisconnect = () => { interval = setInterval(fetchNodes, 15000); };
+    const onConnect = () => { if (interval) { clearInterval(interval); interval = null; } };
+    if (wsFallback && !wsFallback.connected) onDisconnect();
+    wsFallback?.on?.('disconnect', onDisconnect);
+    wsFallback?.on?.('connect', onConnect);
+
+    return () => {
+      if (interval) clearInterval(interval);
+      off('client:online', handleNodeChange);
+      off('client:offline', handleNodeChange);
+      off('client:heartbeat', handleNodeChange);
+      wsFallback?.off?.('disconnect', onDisconnect);
+      wsFallback?.off?.('connect', onConnect);
+    };
   }, []);
 
   const copyToClipboard = async (text: string, field: string) => {
