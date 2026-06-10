@@ -47,6 +47,8 @@ export default function PrintersPage() {
   // Track saving state per printer
   const [savingPaper, setSavingPaper] = useState<number | null>(null);
   const [paperSearch, setPaperSearch] = useState('');
+  const [driverDropdown, setDriverDropdown] = useState<number | null>(null);
+  const [driverSearch, setDriverSearch] = useState('');
   const [actionLoading, setActionLoading] = useState<Record<string, boolean>>({});
   // TIER-1 #3: Group & tag filter state
   const [groups, setGroups] = useState<PrinterGroup[]>([]);
@@ -319,6 +321,18 @@ export default function PrintersPage() {
     document.addEventListener('click', handler);
     return () => document.removeEventListener('click', handler);
   }, [paperDropdown]);
+
+  // Close driver dropdown on click outside
+  useEffect(() => {
+    if (driverDropdown === null) return;
+    const handler = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (target.closest('[data-driver-dropdown]')) return;
+      setDriverDropdown(null);
+    };
+    document.addEventListener('click', handler);
+    return () => document.removeEventListener('click', handler);
+  }, [driverDropdown]);
 
   // Computed values for stats
   const activePrintersList = printers.filter(p => p.config?.auto_removed !== 'true');
@@ -905,28 +919,116 @@ export default function PrintersPage() {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', flex: 1, marginTop: '20px', width: '100%' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border)', paddingBottom: '8px' }}>
                     <span style={{ color: 'var(--text-muted)', fontSize: '13px', fontWeight: 500 }}>Driver</span>
-                    <select
-                      value={printer.driver_id || ''}
-                      onChange={(e) => handleAssignDriver(printer.id, e.target.value ? Number(e.target.value) : null)}
-                      disabled={actionLoading[`driver-${printer.id}`]}
-                      style={{
-                        fontSize: '13px', fontWeight: 600,
-                        color: 'var(--text-primary)',
-                        background: 'rgba(0,0,0,0.3)',
-                        border: '1px solid var(--border)',
-                        borderRadius: '6px',
-                        padding: '4px 8px',
-                        fontFamily: 'Share Tech Mono, monospace',
-                        cursor: 'pointer',
-                        maxWidth: '180px',
-                        textAlign: 'right',
-                      }}
-                    >
-                      <option value="">N/A</option>
-                      {driversList.map((d: any) => (
-                        <option key={d.id} value={d.id}>{d.name}</option>
-                      ))}
-                    </select>
+                    <div style={{ position: 'relative' }} data-driver-dropdown>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); const next = driverDropdown !== printer.id; setDriverDropdown(next ? printer.id : null); if (next) setDriverSearch(''); }}
+                        disabled={actionLoading[`driver-${printer.id}`]}
+                        style={{
+                          display: 'inline-flex', alignItems: 'center', gap: '6px',
+                          fontSize: '13px', fontWeight: 600,
+                          color: printer.driver_id ? 'var(--text-primary)' : 'var(--text-muted)',
+                          background: 'rgba(0,0,0,0.3)',
+                          border: '1px solid var(--border)',
+                          borderRadius: '6px',
+                          padding: '4px 8px',
+                          fontFamily: 'Share Tech Mono, monospace',
+                          cursor: 'pointer',
+                          maxWidth: '180px', textAlign: 'right',
+                          transition: 'all 0.2s'
+                        }}
+                        onMouseEnter={(e) => { e.currentTarget.style.borderColor = 'var(--accent-cyan)'; }}
+                        onMouseLeave={(e) => { e.currentTarget.style.borderColor = 'var(--border)'; }}
+                      >
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {printer.driver_name || 'N/A'}
+                        </span>
+                        <span style={{ fontSize: '10px', opacity: 0.6 }}>▼</span>
+                      </button>
+                      {driverDropdown === printer.id && (
+                        <div
+                          className="card"
+                          style={{
+                            position: 'absolute', right: 0, top: '32px', zIndex: 100,
+                            width: '280px', maxHeight: '340px', overflowY: 'auto',
+                            padding: '8px 0', display: 'flex', flexDirection: 'column'
+                          }}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)' }}>
+                            <div style={{ position: 'relative' }}>
+                              <Search style={{ position: 'absolute', left: '8px', top: '50%', transform: 'translateY(-50%)', width: '13px', height: '13px', color: 'var(--text-muted)' }} />
+                              <input
+                                autoFocus
+                                type="text"
+                                placeholder="Search driver…"
+                                value={driverSearch}
+                                onChange={(e) => setDriverSearch(e.target.value)}
+                                style={{
+                                  width: '100%', padding: '6px 8px 6px 28px', fontSize: '12px',
+                                  background: 'rgba(0,0,0,0.3)', border: '1px solid var(--border)',
+                                  borderRadius: '6px', color: 'var(--text-primary)', outline: 'none',
+                                }}
+                                onKeyDown={(e) => { if (e.key === 'Escape') { setDriverDropdown(null); setDriverSearch(''); } }}
+                              />
+                            </div>
+                            {printer.driver_id && (
+                              <button
+                                onClick={(e) => { e.stopPropagation(); handleAssignDriver(printer.id, null); setDriverDropdown(null); }}
+                                style={{
+                                  background: 'transparent', border: 'none', color: 'var(--accent-amber)',
+                                  fontSize: '11px', fontWeight: 600, cursor: 'pointer', padding: '6px 0 0',
+                                  display: 'flex', alignItems: 'center', gap: '4px'
+                                }}
+                              >
+                                <RefreshCw style={{ width: '10px', height: '10px' }} /> Clear driver
+                              </button>
+                            )}
+                          </div>
+                          <div style={{ display: 'flex', flexDirection: 'column' }}>
+                            {(() => {
+                              const q = driverSearch.toLowerCase().trim();
+                              const filtered = q
+                                ? driversList.filter((d: any) => d.name.toLowerCase().includes(q) || (d.description || '').toLowerCase().includes(q))
+                                : driversList;
+                              return filtered.length > 0 ? filtered.map((d: any) => (
+                                <button
+                                  key={d.id}
+                                  onClick={(e) => { e.stopPropagation(); handleAssignDriver(printer.id, d.id); setDriverDropdown(null); }}
+                                  style={{
+                                    width: '100%', textAlign: 'left', padding: '8px 12px', fontSize: '13px',
+                                    background: printer.driver_id === d.id ? 'rgba(0, 212, 255, 0.08)' : 'transparent',
+                                    border: 'none',
+                                    color: printer.driver_id === d.id ? 'var(--accent-cyan)' : 'var(--text-primary)',
+                                    cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: '2px',
+                                    transition: 'all 0.2s'
+                                  }}
+                                  onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-hover)'; }}
+                                  onMouseLeave={(e) => { e.currentTarget.style.background = printer.driver_id === d.id ? 'rgba(0, 212, 255, 0.08)' : 'transparent'; }}
+                                >
+                                  <span style={{ fontWeight: printer.driver_id === d.id ? 600 : 400 }}>
+                                    {d.name}
+                                  </span>
+                                  {d.description && (
+                                    <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                                      {d.description}
+                                    </span>
+                                  )}
+                                </button>
+                              )) : (
+                                <div style={{ padding: '16px 12px', fontSize: '12px', color: 'var(--text-muted)', textAlign: 'center' }}>
+                                  No match for "{driverSearch}"
+                                </div>
+                              );
+                            })()}
+                            {driversList.length === 0 && (
+                              <div style={{ padding: '16px 12px', fontSize: '12px', color: 'var(--text-muted)', textAlign: 'center' }}>
+                                No drivers. Add in Settings → Drivers.
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border)', paddingBottom: '8px' }}>
                     <span style={{ color: 'var(--text-muted)', fontSize: '13px', fontWeight: 500 }}>Port</span>
