@@ -25,7 +25,7 @@ const path = require('path');
 const os = require('os');
 const { spawn } = require('child_process');
 
-const CURRENT_VERSION = '1.2.0';
+const CURRENT_VERSION = '1.2.1';
 const UPDATE_CHECK_INTERVAL = 30 * 60 * 1000; // 30 minutes
 const INITIAL_CHECK_DELAY = 60 * 1000;        // wait 1 min after startup
 
