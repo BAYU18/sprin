@@ -1246,7 +1246,7 @@ export default function PrintersPage() {
                 {/* CARD TOOLBAR ROW */}
                 <div style={{ display: 'flex', gap: '8px', marginTop: '16px', paddingTop: '16px', borderTop: '1px solid var(--border)', width: '100%' }}>
                   <Link
-                    href={`/printers/${printer.id}`}
+                    href="/jobs"
                     className="btn-primary"
                     style={{
                       flex: 1,
