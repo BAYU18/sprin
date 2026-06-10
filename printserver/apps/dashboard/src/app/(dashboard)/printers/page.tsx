@@ -148,14 +148,14 @@ export default function PrintersPage() {
     }
   }, []);
 
-  const fetchHiddenCount = async () => {
+  const fetchHiddenCount = useCallback(async () => {
     try {
       const resp = await printersApi.removed();
       if (resp?.data) {
         setHiddenCount(resp.data.count || 0);
       }
     } catch (e) { /* silent */ }
-  };
+  }, []);
 
   // Smart driver auto-detect: previews matches (dry-run), then applies if any
   // changes are found. Re-evaluates all printers (including already-assigned).
@@ -199,13 +199,13 @@ export default function PrintersPage() {
     }
   };
 
-  const fetchPaperSizes = async () => {
+  const fetchPaperSizes = useCallback(async () => {
     try {
       const resp = await paperApi.list();
       setPaperSizes(resp.data.sizes || []);
       setPaperDefault(resp.data.default || 'A4');
     } catch (e) { /* silent */ }
-  };
+  }, []);
 
   // TIER-2 #4: in-place patch from granular events (no full re-fetch).
   // Mirror clients/page.tsx:31-45 pattern. Fallback to re-fetch only when
