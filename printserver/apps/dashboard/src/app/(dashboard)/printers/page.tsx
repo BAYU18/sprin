@@ -57,10 +57,25 @@ export default function PrintersPage() {
   const handleTestPrint = async (printerId: number) => {
     setActionLoading(prev => ({ ...prev, [`test-${printerId}`]: true }));
     try {
-      await printersApi.testPrint(printerId);
-      alert('Test print job submitted successfully!');
+      const resp = await printersApi.testPrint(printerId);
+      const d = resp.data || {};
+      const ms = typeof d.durationMs === 'number' ? ` in ${d.durationMs} ms` : '';
+      alert(
+        `✅ Test print OK${ms}\n\n` +
+        `Printer: ${d.printerName ?? printerId}\n` +
+        `Node ID: ${d.clientId ?? '-'}\n` +
+        `Job #${d.jobId ?? '-'}${d.method ? ` (via ${d.method})` : ''}\n\n` +
+        `One test page should now be printing.`
+      );
     } catch (e: any) {
-      alert(`Failed to test print: ${e.response?.data?.error || e.message}`);
+      const d = e.response?.data || {};
+      const ms = typeof d.durationMs === 'number' ? ` after ${d.durationMs} ms` : '';
+      alert(
+        `❌ Test print FAILED${ms}\n\n` +
+        `${d.error || e.message}\n\n` +
+        (d.clientId ? `Node ID: ${d.clientId}\n` : '') +
+        `Check that the node is online and the printer driver is installed.`
+      );
     } finally {
       setActionLoading(prev => ({ ...prev, [`test-${printerId}`]: false }));
     }

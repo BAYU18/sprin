@@ -17,8 +17,8 @@ declare module 'fastify' {
         io?: SocketIOServer;
         /** Central print router used by /api/jobs/submit. */
         printRouter: any;
-        /** IPP service reference for /printers/ipp integration. */
-        ippService?: any;
+        /** IPP server instance (port 631 — test print, raw TCP, job dispatch). */
+        ippServer?: any;
     }
 
     interface FastifyRequest {

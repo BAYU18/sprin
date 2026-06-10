@@ -350,18 +350,18 @@ export async function setupPrintersRoutes(fastify: FastifyInstance) {
         const printer = await fastify.knex('printers').where({ id: printerId }).first();
         if (!printer) return reply.status(404).send({ error: 'Printer not found' });
 
+        if (!fastify.ippServer) {
+            return reply.status(503).send({ error: 'IPP service not available' });
+        }
+
         try {
-            const result = await fastify.printRouter.submitJob({
-                userId: 1,
-                clientId: printer.client_id || 1,
-                printerId: printerId,
-                filePath: 'assets/test-page.pdf',
-                fileName: 'TestPrintPage.pdf',
-                fileType: 'application/pdf',
-                copies: 1,
-                options: { isTestPage: true }
-            });
-            return { success: true, job: result };
+            // Direct Socket.IO dispatch to the node (same path as live printing),
+            // not the BullMQ queue — so we actually verify server → node → printer.
+            const result = await fastify.ippServer.sendTestPrint(printerId);
+            if (!result.success) {
+                return reply.status(502).send(result);
+            }
+            return { success: true, ...result };
         } catch (error) {
             return reply.status(400).send({ error: (error as Error).message });
         }

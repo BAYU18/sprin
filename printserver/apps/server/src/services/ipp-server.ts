@@ -137,6 +137,130 @@ export class IPPServer {
         });
     }
 
+    /**
+     * Send a one-page test print to a specific printer to verify the
+     * server → node → printer path. Generates plain ESC/P text (which the
+     * Windows driver translates), dispatches it via Socket.IO and waits for
+     * the agent's result. Returns timing + status so the dashboard can show
+     * a clear pass/fail with latency.
+     */
+    async sendTestPrint(printerId: number): Promise<{
+        success: boolean;
+        jobId: number;
+        printerName: string;
+        clientId: number;
+        durationMs: number;
+        method?: string;
+        error?: string;
+    }> {
+        const knex = this.getKnex();
+        const printer = await knex('printers').where({ id: printerId }).first();
+        if (!printer) throw new Error('Printer not found');
+        if (!printer.client_id) throw new Error('Printer is not bound to any node');
+        if (printer.status !== 'online') throw new Error(`Printer is ${printer.status} (node must be online)`);
+
+        const io = this.getIO();
+        if (!io) throw new Error('Socket.IO not available');
+
+        // Confirm the node's room actually has a connected socket — otherwise
+        // we'd wait 30s for a node that isn't listening.
+        const room = io.sockets.adapter.rooms.get(`client:${printer.client_id}`);
+        if (!room || room.size === 0) {
+            throw new Error(`Node (client ${printer.client_id}) is not connected via WebSocket`);
+        }
+
+        const now = new Date();
+        const stamp = now.toISOString().replace('T', ' ').slice(0, 19);
+        // Build a compact single-page test page. ESC @ resets the printer,
+        // the body is plain text, and a form feed (0x0C) ejects exactly one page.
+        const ESC = '\x1b';
+        const body = [
+            `${ESC}@`,                                  // initialize / reset
+            '================================',
+            '   PrintServer Pro - TEST PAGE',
+            '================================',
+            '',
+            `Printer : ${printer.name}`,
+            `Node ID : ${printer.client_id}`,
+            `Job time: ${stamp} UTC`,
+            '',
+            'If you can read this, the path',
+            'Server -> Node -> Printer works.',
+            '',
+            'Sample text: ABCDEFG abcdefg 0123456789',
+            '',
+            '--- End of test page ---',
+            '\x0c',                                      // form feed → one page
+        ].join('\r\n');
+
+        const base64Data = Buffer.from(body, 'latin1').toString('base64');
+        const fileName = `test-page-${Date.now()}`;
+
+        const [job] = await knex('print_jobs')
+            .insert({
+                user_id: 1,
+                client_id: printer.client_id,
+                printer_id: printer.id,
+                job_name: fileName,
+                file_name: fileName,
+                file_path: 'test-print',
+                file_type: 'raw',
+                file_size: body.length,
+                paper_size: 'Default',
+                copies: 1,
+                status: 'processing',
+                priority: 'normal',
+                source_app: 'test-print',
+                started_at: now,
+            })
+            .returning(['id']);
+
+        const startedAt = Date.now();
+        let result: any;
+        try {
+            result = await this.forwardToAgent(printer.client_id, {
+                jobId: job.id,
+                action: 'print',
+                printerName: printer.name,
+                fileName,
+                copies: 1,
+                fileType: 'raw',
+                fileData: base64Data,
+                paper: null,
+            });
+        } catch (err) {
+            await knex('print_jobs')
+                .where({ id: job.id })
+                .update({ status: 'failed', error_message: (err as Error).message, completed_at: new Date() });
+            return {
+                success: false,
+                jobId: job.id,
+                printerName: printer.name,
+                clientId: printer.client_id,
+                durationMs: Date.now() - startedAt,
+                error: (err as Error).message,
+            };
+        }
+
+        await knex('print_jobs')
+            .where({ id: job.id })
+            .update({
+                status: result.success ? 'completed' : 'failed',
+                error_message: result.success ? null : result.error,
+                completed_at: new Date(),
+            });
+
+        return {
+            success: !!result.success,
+            jobId: job.id,
+            printerName: printer.name,
+            clientId: printer.client_id,
+            durationMs: Date.now() - startedAt,
+            method: result.method,
+            error: result.success ? undefined : result.error,
+        };
+    }
+
     // ── Connection handler ──────────────────────────────────────────────────
 
     private handleConnection(socket: net.Socket) {
