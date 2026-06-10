@@ -40,6 +40,7 @@ export default function PrintersPage() {
   // Per-printer paper config modal (full: size + orientation + tray + custom)
   const [paperConfigPrinter, setPaperConfigPrinter] = useState<{ id: number; name: string } | null>(null);
   const [paperSizes, setPaperSizes] = useState<PaperSize[]>([]);
+  const [driversList, setDriversList] = useState<any[]>([]);
   const [paperDefault, setPaperDefault] = useState('A4');
   // Track which printer card has the paper dropdown open
   const [paperDropdown, setPaperDropdown] = useState<number | null>(null);
@@ -78,6 +79,18 @@ export default function PrintersPage() {
       );
     } finally {
       setActionLoading(prev => ({ ...prev, [`test-${printerId}`]: false }));
+    }
+  };
+
+  const handleAssignDriver = async (printerId: number, driverId: number | null) => {
+    setActionLoading(prev => ({ ...prev, [`driver-${printerId}`]: true }));
+    try {
+      await driversApi.assignToPrinter(printerId, driverId);
+      await fetchPrinters();
+    } catch (e: any) {
+      alert(`Failed to assign driver: ${e.response?.data?.error || e.message}`);
+    } finally {
+      setActionLoading(prev => ({ ...prev, [`driver-${printerId}`]: false }));
     }
   };
 
@@ -234,6 +247,8 @@ export default function PrintersPage() {
     fetchHiddenCount();
     fetchPaperSizes();
     fetchGroupsAndTags();
+    // Fetch available drivers for per-printer dropdown
+    driversApi.list().then(r => setDriversList(r.data || [])).catch(() => {});
 
     // TIER-2 #4: switch from 'printer:update' (full-list re-fetch trigger)
     // to granular events ('printer:patch'/'printer:created'/'printer:removed')
@@ -887,11 +902,30 @@ export default function PrintersPage() {
 
                 {/* INFO LIST */}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', flex: 1, marginTop: '20px', width: '100%' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border)', paddingBottom: '8px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border)', paddingBottom: '8px' }}>
                     <span style={{ color: 'var(--text-muted)', fontSize: '13px', fontWeight: 500 }}>Driver</span>
-                    <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)', fontFamily: 'Share Tech Mono, monospace' }}>
-                      {printer.driver_name || (printer.driver && printer.driver !== 'Unknown' ? printer.driver : 'N/A')}
-                    </span>
+                    <select
+                      value={printer.driver_id || ''}
+                      onChange={(e) => handleAssignDriver(printer.id, e.target.value ? Number(e.target.value) : null)}
+                      disabled={actionLoading[`driver-${printer.id}`]}
+                      style={{
+                        fontSize: '13px', fontWeight: 600,
+                        color: 'var(--text-primary)',
+                        background: 'rgba(0,0,0,0.3)',
+                        border: '1px solid var(--border)',
+                        borderRadius: '6px',
+                        padding: '4px 8px',
+                        fontFamily: 'Share Tech Mono, monospace',
+                        cursor: 'pointer',
+                        maxWidth: '180px',
+                        textAlign: 'right',
+                      }}
+                    >
+                      <option value="">N/A</option>
+                      {driversList.map((d: any) => (
+                        <option key={d.id} value={d.id}>{d.name}</option>
+                      ))}
+                    </select>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border)', paddingBottom: '8px' }}>
                     <span style={{ color: 'var(--text-muted)', fontSize: '13px', fontWeight: 500 }}>Port</span>
