@@ -143,26 +143,31 @@ export class IPPServer {
         let buffer = Buffer.alloc(0);
         let headerCheckDone = false;
         const peer = `${socket.remoteAddress}:${socket.remotePort}`;
+        let isRaw = false;
 
-        // Timeout: if no \r\n\r\n within 2s, treat as raw (non-IPP) print data.
+        // If no \r\n\r\n within 1s and data present, treat as raw (non-IPP) print.
         // This handles Windows TCP/IP port (RAW protocol) connections.
         const rawTimeout = setTimeout(() => {
             if (!headerCheckDone && buffer.length > 0) {
                 headerCheckDone = true;
+                isRaw = true;
                 logger.info(`[IPP] ${peer} raw data (${buffer.length} bytes, no HTTP headers) — treating as direct print job`);
                 this.handleRawPrint(socket, buffer, peer);
             }
-        }, 2000);
+        }, 1000);
 
         socket.on('data', (chunk) => {
             buffer = Buffer.concat([buffer, chunk]);
 
+            if (isRaw) return; // already handling as raw
+
             // Try to parse HTTP request. Wait for \r\n\r\n or end of headers
             const headerEnd = buffer.indexOf('\r\n\r\n');
             if (headerEnd === -1) {
-                // If buffer is large (>8KB) without headers, it's definitely raw data
-                if (buffer.length > 8192 && !headerCheckDone) {
+                // If buffer is large (>2KB) without headers, it's definitely raw data
+                if (buffer.length > 2048 && !headerCheckDone) {
                     headerCheckDone = true;
+                    isRaw = true;
                     clearTimeout(rawTimeout);
                     logger.info(`[IPP] ${peer} large buffer (${buffer.length} bytes) without HTTP headers — treating as raw print`);
                     this.handleRawPrint(socket, buffer, peer);
@@ -485,15 +490,29 @@ export class IPPServer {
 
     private async handleRawPrint(socket: net.Socket, data: Buffer, peer: string) {
         // Raw TCP data from Windows TCP/IP port — no IPP framing.
-        // Route to the first online printer (best-effort).
+        // Route: prefer printer whose name contains 'LX-310', else first online.
+        // TODO: add a default_printer_id config for production use.
         try {
             const knex = this.getKnex();
-            const printers = await knex('printers')
+            
+            // Try to find the target printer by name hint from peer IP
+            let printers = await knex('printers')
                 .leftJoin('clients', 'printers.client_id', 'clients.id')
                 .select('printers.*', 'clients.ip_address as client_ip')
                 .where('printers.status', 'online')
                 .whereNotNull('printers.client_id')
+                .where('printers.name', 'like', '%LX-310%')
                 .limit(1);
+
+            if (!printers.length) {
+                // Fallback: first online printer
+                printers = await knex('printers')
+                    .leftJoin('clients', 'printers.client_id', 'clients.id')
+                    .select('printers.*', 'clients.ip_address as client_ip')
+                    .where('printers.status', 'online')
+                    .whereNotNull('printers.client_id')
+                    .limit(1);
+            }
 
             if (!printers.length) {
                 logger.warn(`[RAW] ${peer} — no online printers available`);
