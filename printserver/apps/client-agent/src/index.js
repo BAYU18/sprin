@@ -1473,14 +1473,15 @@ function main() {
       heapTotalMB: +(mu.heapTotal / 1048576).toFixed(1),
       externalMB: +(mu.external / 1048576).toFixed(1)
     });
-    // Circuit-breaker: a healthy agent sits at ~60MB RSS. If it ever crosses
-    // 600MB something is leaking. Exit cleanly NOW (well below the ~2GB heap
-    // ceiling that triggers SIGABRT/exit 134) so the Scheduled Task relaunches
-    // us in seconds instead of the node sitting silently dead for ~24 min.
+    // Circuit-breaker: a healthy agent sits at ~54MB RSS. If it ever crosses
+    // 600MB something is leaking. Exit NOW (well below the ~2GB heap ceiling
+    // that triggers SIGABRT/exit 134). We exit with code 1 (NOT 0) so Windows
+    // Task Scheduler treats it as a failure and RestartCount relaunches us
+    // within RestartInterval (1 min). exit 0 would be seen as a clean success
+    // and the task would NOT restart, leaving the node silently dead.
     if (rssMB > 600) {
-      logger.error('Memory circuit-breaker tripped — restarting agent', { rssMB });
-      // exit 0 so the relaunch is treated as a clean restart by the task.
-      setTimeout(() => process.exit(0), 250);
+      logger.error('Memory circuit-breaker tripped — exiting (code 1) for task-scheduler restart', { rssMB });
+      setTimeout(() => process.exit(1), 250);
     }
   }, 60 * 1000);
   if (memTimer.unref) memTimer.unref();
