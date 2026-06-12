@@ -36,3 +36,6 @@ tsconfig.tsbuildinfo
 # Logs
 *.log
 npm-debug.log*
+
+# Harvested driver files (artefak runtime, jangan di-commit — bisa puluhan MB)
+apps/server/public/drivers/

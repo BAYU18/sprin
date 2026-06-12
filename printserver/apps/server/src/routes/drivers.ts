@@ -175,14 +175,32 @@ export async function setupDriversRoutes(fastify: FastifyInstance) {
 
         const requestId = `harvest-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
+        // Diagnostik: berapa socket yang benar-benar ada di room client:<id>?
+        // Kalau 0 → agent tidak terhubung via Socket.IO (cuma heartbeat HTTP),
+        // jadi perintah harvest tidak akan pernah sampai → "harvesting" selamanya.
+        const room = `client:${body.client_id}`;
+        let socketCount = 0;
+        try {
+            const sockets = await fastify.io?.in(room).fetchSockets();
+            socketCount = sockets?.length ?? 0;
+        } catch (_) { socketCount = -1; }
+
+        if (socketCount === 0) {
+            logger.warn(`[Drivers] Harvest GAGAL: node ${client.hostname} tidak punya koneksi Socket.IO aktif di room ${room} (heartbeat HTTP jalan, tapi WebSocket command channel mati)`);
+            return reply.status(409).send({
+                error: `Node ${client.hostname} terhubung untuk heartbeat tapi channel perintah (WebSocket) tidak aktif. Restart agent di node tersebut, atau pastikan agent versi terbaru terhubung via Socket.IO.`,
+                reason: 'no_socket',
+            });
+        }
+
         // Kirim perintah ke agent yang berada di room client:<id>
-        fastify.io?.to(`client:${body.client_id}`).emit('driver:harvest', {
+        fastify.io?.to(room).emit('driver:harvest', {
             requestId,
             printerName: body.printer_name,
             printerId: body.printer_id ?? null,
         });
 
-        logger.info(`[Drivers] Harvest dipicu untuk printer "${body.printer_name}" di node ${client.hostname} (req=${requestId})`);
+        logger.info(`[Drivers] Harvest dipicu untuk printer "${body.printer_name}" di node ${client.hostname} (req=${requestId}, sockets=${socketCount})`);
         return { success: true, requestId, message: `Perintah harvest dikirim ke ${client.hostname}` };
     });
 

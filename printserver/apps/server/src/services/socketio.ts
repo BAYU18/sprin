@@ -70,9 +70,11 @@ export function setupSocketIO(fastify: any) {
         // Agent memancarkan progress & hasil akhir export driver. Server hanya
         // meneruskan ke semua dashboard yang terhubung agar UI bisa update.
         socket.on('driver:harvest:progress', (data) => {
+            logger.info(`[Socket.IO] harvest:progress dari agent — ${JSON.stringify(data)?.slice(0, 200)}`);
             socket.broadcast.emit('driver:harvest:progress', data);
         });
         socket.on('driver:harvest:result', (data) => {
+            logger.info(`[Socket.IO] harvest:result dari agent — success=${data?.success} error=${data?.error || '-'} req=${data?.requestId || '-'}`);
             socket.broadcast.emit('driver:harvest:result', data);
         });
 

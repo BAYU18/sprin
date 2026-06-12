@@ -10,6 +10,11 @@ import {
 } from 'lucide-react';
 import { format } from 'date-fns';
 
+// Normalisasi nama driver/printer untuk pencocokan yang toleran beda spasi/kapital.
+function normName(s: any): string {
+  return String(s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
 export default function ClientDetailPage() {
   const params = useParams();
   const router = useRouter();
@@ -20,7 +25,10 @@ export default function ClientDetailPage() {
   const [notFound, setNotFound] = useState(false);
   const [now, setNow] = useState(Date.now());
   // Driver harvest: lacak status per-printer (by printer name) + pesan toast.
-  const [harvest, setHarvest] = useState<Record<string, { stage: string; message: string; done?: boolean; ok?: boolean }>>({});
+  const [harvest, setHarvest] = useState<Record<string, { stage: string; message: string; pct?: number; done?: boolean; ok?: boolean }>>({});
+  // Set nama printer yang DRIVER-nya sudah ada di server (harvested dari node INI).
+  // Diisi dari /api/drivers saat load → bikin tombol "Harvested" persist walau refresh.
+  const [harvestedSet, setHarvestedSet] = useState<Set<string>>(new Set());
   const [toast, setToast] = useState<{ ok: boolean; text: string } | null>(null);
 
   const fetchDetail = useCallback(async () => {
@@ -35,9 +43,28 @@ export default function ClientDetailPage() {
     }
   }, [id]);
 
+  // Ambil daftar driver server → tandai printer yang sudah dipanen dari node INI.
+  const fetchHarvested = useCallback(async () => {
+    try {
+      const res = await driversApi.list();
+      const list: any[] = Array.isArray(res.data) ? res.data : (res.data?.drivers || []);
+      const names = new Set<string>();
+      for (const d of list) {
+        // Driver dianggap "sudah ada di server" → tandai harvested untuk printer
+        // dengan nama yang cocok, TANPA peduli dipanen dari node mana.
+        // Cocokkan lewat beberapa kemungkinan field nama driver.
+        for (const field of [d?.original_printer_name, d?.windows_driver_name, d?.name]) {
+          if (field) names.add(normName(field));
+        }
+      }
+      setHarvestedSet(names);
+    } catch (_) { /* non-fatal: tombol tetap fungsional tanpa status persist */ }
+  }, [id]);
+
   useEffect(() => {
     if (!Number.isFinite(id)) { setNotFound(true); setLoading(false); return; }
     fetchDetail();
+    fetchHarvested();
     const t = setInterval(() => setNow(Date.now()), 1000);
 
     // TIER-2 #4: replace 15s polling with socket-driven updates.
@@ -69,19 +96,34 @@ export default function ClientDetailPage() {
     on('printer:created', handlePrinterCreated);
 
     // Driver harvest progress/result — filter ke node ini saja.
+    // PENTING: clientId dari agent itu number, id dari URL juga number (Number(params.id)).
+    // Pakai Number() di kedua sisi biar match (dulu string vs number → semua ke-filter keluar).
+    const STAGE_PCT: Record<string, number> = { sending: 8, resolving: 20, exporting: 45, zipping: 65, uploading: 85 };
     const onHarvestProgress = (d: any) => {
-      if (d?.clientId !== id || !d?.printerName) return;
-      setHarvest(prev => ({ ...prev, [d.printerName]: { stage: d.stage || 'working', message: d.message || 'Memproses...' } }));
+      if (Number(d?.clientId) !== id || !d?.printerName) return;
+      const stage = d.stage || 'working';
+      setHarvest(prev => ({ ...prev, [d.printerName]: { stage, message: d.message || 'Memproses...', pct: STAGE_PCT[stage] ?? prev[d.printerName]?.pct ?? 10 } }));
     };
     const onHarvestResult = (d: any) => {
-      if (d?.clientId !== id || !d?.printerName) return;
-      setHarvest(prev => ({ ...prev, [d.printerName]: { stage: 'done', message: d.success ? 'Driver tersimpan' : (d.error || 'Gagal'), done: true, ok: !!d.success } }));
+      if (Number(d?.clientId) !== id || !d?.printerName) return;
+      setHarvest(prev => ({ ...prev, [d.printerName]: {
+        stage: 'done',
+        message: d.success ? `Tersimpan${d.sizeMB ? ` (${d.sizeMB} MB)` : ''}` : (d.error || 'Gagal'),
+        pct: 100, done: true, ok: !!d.success,
+      } }));
       setToast({ ok: !!d.success, text: d.success
-        ? `Driver "${d.driverName}" dari ${d.printerName} tersimpan di server (${d.sizeMB ?? '?'} MB)`
+        ? `Driver "${d.driverName || d.printerName}" dari ${d.printerName} tersimpan di server${d.sizeMB ? ` (${d.sizeMB} MB)` : ''}`
         : `Harvest gagal: ${d.error || 'unknown'}` });
       setTimeout(() => setToast(null), 6000);
-      // bersihkan badge setelah beberapa detik
-      setTimeout(() => setHarvest(prev => { const c = { ...prev }; delete c[d.printerName]; return c; }), 8000);
+      // CATATAN: status sukses TIDAK dihapus — tombol tetap "Harvested" sebagai
+      // penanda permanen. Hanya status GAGAL yang dibersihkan agar bisa coba lagi.
+      if (d.success) {
+        // Tandai persist + refresh dari server (sumber kebenaran).
+        setHarvestedSet(prev => new Set(prev).add(normName(d.printerName)));
+        fetchHarvested();
+      } else {
+        setTimeout(() => setHarvest(prev => { const c = { ...prev }; delete c[d.printerName]; return c; }), 8000);
+      }
     };
     on('driver:harvest:progress', onHarvestProgress);
     on('driver:harvest:result', onHarvestResult);
@@ -106,7 +148,7 @@ export default function ClientDetailPage() {
       wsFallback?.off?.('disconnect', onDisconnect);
       wsFallback?.off?.('connect', onConnect);
     };
-  }, [id, fetchDetail]);
+  }, [id, fetchDetail, fetchHarvested]);
 
   const C = {
     cyan: 'var(--accent-cyan)', green: 'var(--accent-green)', amber: 'var(--accent-amber)',
@@ -195,12 +237,12 @@ export default function ClientDetailPage() {
 
   const triggerHarvest = async (printerName: string, printerId?: number) => {
     if (!online) { setToast({ ok: false, text: 'Node offline — tidak bisa harvest driver' }); setTimeout(() => setToast(null), 5000); return; }
-    setHarvest(prev => ({ ...prev, [printerName]: { stage: 'sending', message: 'Mengirim perintah...' } }));
+    setHarvest(prev => ({ ...prev, [printerName]: { stage: 'sending', message: 'Mengirim perintah...', pct: 8 } }));
     try {
       await driversApi.harvest(id, printerName, printerId);
     } catch (e: any) {
       const msg = e?.response?.data?.error || e.message || 'Gagal mengirim perintah';
-      setHarvest(prev => ({ ...prev, [printerName]: { stage: 'done', message: msg, done: true, ok: false } }));
+      setHarvest(prev => ({ ...prev, [printerName]: { stage: 'done', message: msg, pct: 100, done: true, ok: false } }));
       setToast({ ok: false, text: msg });
       setTimeout(() => setToast(null), 6000);
     }
@@ -293,31 +335,50 @@ export default function ClientDetailPage() {
                 const pid = typeof p === 'object' ? p?.id : undefined;
                 const hv = harvest[name];
                 const busy = !!hv && !hv.done;
+                // Harvested = sukses di sesi ini ATAU driver-nya sudah ada di server (persist).
+                const harvested = (!!hv && hv.done && hv.ok) || harvestedSet.has(normName(name));
+                const failed = !!hv && hv.done && !hv.ok;
                 return (
-                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 12px', background: C.sec, borderRadius: 8, border: `1px solid ${C.border}` }}>
-                    <span style={{ width: 8, height: 8, borderRadius: '50%', background: ok ? C.green : C.muted, boxShadow: ok ? `0 0 8px ${C.green}` : 'none', flexShrink: 0 }} />
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontFamily: C.mono, fontSize: 13, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</div>
-                      {hv
-                        ? <div style={{ fontFamily: C.mono, fontSize: 10, color: hv.done ? (hv.ok ? C.green : C.red) : C.cyan, marginTop: 2 }}>{hv.message}</div>
-                        : (port && <div style={{ fontFamily: C.mono, fontSize: 10, color: C.muted, marginTop: 2 }}>{port}</div>)}
+                  <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '10px 12px', background: C.sec, borderRadius: 8, border: `1px solid ${harvested ? 'rgba(0,255,136,0.3)' : C.border}` }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                      <span style={{ width: 8, height: 8, borderRadius: '50%', background: ok ? C.green : C.muted, boxShadow: ok ? `0 0 8px ${C.green}` : 'none', flexShrink: 0 }} />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontFamily: C.mono, fontSize: 13, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</div>
+                        {hv
+                          ? <div style={{ fontFamily: C.mono, fontSize: 10, color: failed ? C.red : (harvested ? C.green : C.cyan), marginTop: 2 }}>{hv.message}</div>
+                          : (port && <div style={{ fontFamily: C.mono, fontSize: 10, color: C.muted, marginTop: 2 }}>{port}</div>)}
+                      </div>
+                      <button
+                        onClick={() => triggerHarvest(name, pid)}
+                        disabled={busy || harvested || !online}
+                        title={harvested ? 'Driver sudah dipanen ke server' : (online ? 'Export driver printer ini & simpan ke server sebagai cadangan' : 'Node offline')}
+                        style={{
+                          display: 'inline-flex', alignItems: 'center', gap: 6, padding: '5px 10px',
+                          background: harvested ? 'rgba(0,255,136,0.1)' : 'rgba(0,212,255,0.08)',
+                          border: `1px solid ${harvested ? 'rgba(0,255,136,0.4)' : 'rgba(0,212,255,0.3)'}`,
+                          borderRadius: 6, color: harvested ? C.green : C.cyan,
+                          cursor: (busy || harvested || !online) ? 'not-allowed' : 'pointer',
+                          fontFamily: C.sans, fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5,
+                          opacity: (busy || !online) && !harvested ? 0.5 : 1, flexShrink: 0,
+                        }}
+                      >
+                        {busy
+                          ? <Loader2 size={13} style={{ animation: 'spin 1s linear infinite' }} />
+                          : harvested ? <CheckCircle2 size={13} /> : <DownloadCloud size={13} />}
+                        {busy ? 'Harvesting' : harvested ? 'Harvested' : 'Harvest'}
+                      </button>
+                      <span style={{ fontFamily: C.mono, fontSize: 10, color: ok ? C.green : C.muted }}>{ok ? 'ONLINE' : 'OFFLINE'}</span>
                     </div>
-                    <button
-                      onClick={() => triggerHarvest(name, pid)}
-                      disabled={busy || !online}
-                      title={online ? 'Export driver printer ini & simpan ke server sebagai cadangan' : 'Node offline'}
-                      style={{
-                        display: 'inline-flex', alignItems: 'center', gap: 6, padding: '5px 10px',
-                        background: 'rgba(0,212,255,0.08)', border: `1px solid rgba(0,212,255,0.3)`,
-                        borderRadius: 6, color: C.cyan, cursor: (busy || !online) ? 'not-allowed' : 'pointer',
-                        fontFamily: C.sans, fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5,
-                        opacity: (busy || !online) ? 0.5 : 1, flexShrink: 0,
-                      }}
-                    >
-                      {busy ? <Loader2 size={13} style={{ animation: 'spin 1s linear infinite' }} /> : <DownloadCloud size={13} />}
-                      {busy ? 'Harvesting' : 'Harvest'}
-                    </button>
-                    <span style={{ fontFamily: C.mono, fontSize: 10, color: ok ? C.green : C.muted }}>{ok ? 'ONLINE' : 'OFFLINE'}</span>
+                    {/* Progress bar — tampil selama proses harvest berlangsung */}
+                    {busy && (
+                      <div style={{ width: '100%', height: 4, background: 'rgba(255,255,255,0.08)', borderRadius: 2, overflow: 'hidden' }}>
+                        <div style={{
+                          width: `${hv?.pct ?? 10}%`, height: '100%', background: C.cyan,
+                          borderRadius: 2, transition: 'width 0.4s ease',
+                          boxShadow: `0 0 8px ${C.cyan}`,
+                        }} />
+                      </div>
+                    )}
                   </div>
                 );
               })}

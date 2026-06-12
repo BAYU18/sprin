@@ -1173,24 +1173,54 @@ $d = Get-PrinterDriver -Name $p.DriverName -ErrorAction Stop;
       logger.info('Resolved driver', { driverName, infPath });
       emit('driver:harvest:progress', { stage: 'exporting', message: `Export driver "${driverName}"...`, driverName });
 
-      // 3: export the driver package (INF + all referenced files) to exportDir.
+      // 3: export the driver package. STRATEGI BERLAPIS:
+      //   A. Kalau InfPath menunjuk ke DriverStore\FileRepository (Windows modern),
+      //      langsung ZIP folder itu — TIDAK butuh admin, paling andal.
+      //   B. Fallback: pnputil /export-driver (butuh admin; tangkap pesan aslinya).
       fs.mkdirSync(exportDir, { recursive: true });
-      const infLeaf = path.basename(infPath); // pnputil wants the published oemXX.inf name
-      // Prefer the published name in the driverstore; fall back to full InfPath.
+      const infLeaf = path.basename(infPath);
       const psExport = `
 $ErrorActionPreference='Stop';
 $dest='${exportDir.replace(/'/g, "''")}';
 $leaf='${infLeaf.replace(/'/g, "''")}';
 $full='${infPath.replace(/'/g, "''")}';
-$target = if (Test-Path $full) { $full } else { $leaf };
-pnputil /export-driver $target $dest | Out-String`;
-      const exportOut = await execPS(psExport);
-      logger.info('pnputil export done', { out: (exportOut || '').slice(0, 300) });
 
-      // sanity: did anything land in exportDir?
+# --- Strategi A: copy folder DriverStore langsung (no elevation) ---
+$srcDir = $null;
+if ($full -and (Test-Path $full)) {
+  $parent = Split-Path -Parent $full;
+  if ($parent -like '*DriverStore\\FileRepository\\*' -or (Get-ChildItem -Path $parent -Filter *.inf -ErrorAction SilentlyContinue)) {
+    $srcDir = $parent;
+  }
+}
+if ($srcDir -ne $null) {
+  Copy-Item -Path (Join-Path $srcDir '*') -Destination $dest -Recurse -Force;
+  Write-Output ('COPIED_FROM_DRIVERSTORE:' + $srcDir);
+} else {
+  # --- Strategi B: pnputil (butuh admin) ---
+  $target = if (Test-Path $full) { $full } else { $leaf };
+  $out = & pnputil /export-driver $target $dest 2>&1 | Out-String;
+  Write-Output ('PNPUTIL_EXIT:' + $LASTEXITCODE);
+  Write-Output $out;
+}`;
+      // Jalankan TANPA membiarkan exit code pnputil membuat reject — kita nilai
+      // sukses dari isi folder, dan tangkap pesan asli untuk diagnosa.
+      let exportOut = '';
+      try {
+        exportOut = await execPS(psExport);
+      } catch (e) {
+        exportOut = e.message || '';
+        logger.warn('Export step returned non-zero', { detail: exportOut.slice(0, 400) });
+      }
+      logger.info('Driver export attempt done', { out: (exportOut || '').slice(0, 400) });
+
+      // sanity: did anything land in exportDir? (kriteria sukses sebenarnya)
       const files = fs.existsSync(exportDir) ? fs.readdirSync(exportDir) : [];
       if (files.length === 0) {
-        throw new Error('Export folder kosong — pnputil tidak menghasilkan file driver.');
+        const elevHint = /access is denied|denied|elevat|administrator|0x80070005/i.test(exportOut)
+          ? ' Kemungkinan agent perlu dijalankan sebagai Administrator (pnputil butuh hak admin).'
+          : '';
+        throw new Error(`Export gagal — tidak ada file driver yang dihasilkan.${elevHint} Detail: ${(exportOut || 'tidak ada output').slice(0, 200)}`);
       }
 
       emit('driver:harvest:progress', { stage: 'zipping', message: 'Mengompres driver...' });
