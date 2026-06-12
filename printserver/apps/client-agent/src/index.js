@@ -14,6 +14,7 @@ const http = require('http');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const net = require('net');
 const { exec, spawn } = require('child_process');
 const { promisify } = require('util');
 const { EventEmitter } = require('events');
@@ -51,6 +52,27 @@ const DEFAULT_CONFIG = {
 
 // ─── Logger ──────────────────────────────────────────────────────────────────
 
+// Resolve a writable log path next to the running exe. When the task runs as
+// SYSTEM, console output is discarded and electron-log lands in the SYSTEM
+// profile (unreachable). The exe's own dir is confirmed writable (we write
+// version.txt there), so crash diagnostics go there instead.
+const LOG_DIR = path.dirname(process.execPath || process.argv[1]);
+const LOG_FILE = path.join(LOG_DIR, 'agent.log');
+const LOG_MAX_BYTES = 5 * 1024 * 1024; // 5 MB, rotate to .old once exceeded
+
+function writeLogLine(line) {
+  try {
+    // Size-based rotation so the file never grows unbounded.
+    try {
+      const st = fs.statSync(LOG_FILE);
+      if (st.size > LOG_MAX_BYTES) {
+        try { fs.renameSync(LOG_FILE, LOG_FILE + '.old'); } catch (_) {}
+      }
+    } catch (_) { /* file may not exist yet */ }
+    fs.appendFileSync(LOG_FILE, line + '\n', 'utf8');
+  } catch (_) { /* never let logging crash the agent */ }
+}
+
 class Logger {
   constructor(level = 'info') {
     this.level = level;
@@ -66,17 +88,17 @@ class Logger {
     return out;
   }
 
-  debug(msg, data) { if (this.levels[this.level] <= 0) console.log(this.format('debug', msg, data)); }
-  info(msg, data) { if (this.levels[this.level] <= 1) console.log(this.format('info', msg, data)); }
-  warn(msg, data) { if (this.levels[this.level] <= 2) console.log(this.format('warn', msg, data)); }
-  error(msg, data) { if (this.levels[this.level] <= 3) console.error(this.format('error', msg, data)); }
+  debug(msg, data) { if (this.levels[this.level] <= 0) { const l = this.format('debug', msg, data); console.log(l); writeLogLine(l); } }
+  info(msg, data) { if (this.levels[this.level] <= 1) { const l = this.format('info', msg, data); console.log(l); writeLogLine(l); } }
+  warn(msg, data) { if (this.levels[this.level] <= 2) { const l = this.format('warn', msg, data); console.log(l); writeLogLine(l); } }
+  error(msg, data) { if (this.levels[this.level] <= 3) { const l = this.format('error', msg, data); console.error(l); writeLogLine(l); } }
 }
 
 const logger = new Logger(DEFAULT_CONFIG.logLevel);
 
 // ─── PowerShell Helper ────────────────────────────────────────────────────────
 
-function execPS(command) {
+function execPS(command, extraEnv) {
   return new Promise((resolve, reject) => {
     // Remove shell:true to avoid cmd.exe interpreting PowerShell pipeline syntax
     const ps = spawn('powershell', [
@@ -84,7 +106,7 @@ function execPS(command) {
       '-NonInteractive',
       '-ExecutionPolicy', 'Bypass',
       '-Command', command
-    ]);
+    ], extraEnv ? { env: { ...process.env, ...extraEnv } } : undefined);
 
     let stdout = '';
     let stderr = '';
@@ -278,25 +300,35 @@ class SpoolWatcher extends EventEmitter {
 
     const patterns = this.dirs.map(d => {
       if (d.includes('*')) {
-        // Expand wildcards for user temp dirs
-        const base = d.split('*')[0].trim();
+        // Expand wildcards for user temp dirs. IMPORTANT: preserve the suffix
+        // AFTER the '*'. e.g. "C:\Users\*\AppData\Local\Temp" must expand to
+        // each user's "...\AppData\Local\Temp" — NOT to "C:\Users\<user>\*"
+        // (watching every profile root blew RSS to 3GB → OOM / exit 134).
+        const starIdx = d.indexOf('*');
+        const base = d.slice(0, starIdx).trim();          // "C:\Users\"
+        const suffix = d.slice(starIdx + 1).replace(/^[\\/]+/, ''); // "AppData\Local\Temp"
         if (fs.existsSync(base)) {
           const entries = fs.readdirSync(base, { withFileTypes: true });
           return entries
             .filter(e => e.isDirectory())
-            .map(e => path.join(base, e.name, '*'));
+            .map(e => suffix ? path.join(base, e.name, suffix) : path.join(base, e.name))
+            // Only keep dirs that actually exist — avoids chokidar polling
+            // thousands of non-existent paths.
+            .filter(p => fs.existsSync(p));
         }
         return null;
       }
       return d;
     }).filter(Boolean);
+    // Flatten (each wildcard entry returns an array of expanded dirs).
+    const flatPatterns = patterns.flat();
 
-    logger.info('Starting spool watcher on:', patterns);
+    logger.info('Starting spool watcher on:', flatPatterns);
 
-    this.watcher = chokidar.watch(patterns, {
+    this.watcher = chokidar.watch(flatPatterns, {
       persistent: true,
       ignoreInitial: true,
-      depth: 1,
+      depth: 0,
       awaitWriteFinish: {
         stabilityThreshold: 2000,
         pollInterval: 100
@@ -314,8 +346,17 @@ class SpoolWatcher extends EventEmitter {
     const ext = path.extname(filePath).toLowerCase();
     if (!this.extensions.includes(ext)) return;
 
-    const stat = fs.statSync(filePath);
+    let stat;
+    try { stat = fs.statSync(filePath); } catch { return; }
     if (stat.size === 0) return;
+    // Guard against pathological files — a normal print spool is well under
+    // 100MB. Anything larger is almost certainly not a real print job and
+    // would risk blowing memory / upload timeouts.
+    const MAX_FILE_BYTES = 100 * 1024 * 1024;
+    if (stat.size > MAX_FILE_BYTES) {
+      logger.warn('Skipping oversized file', { file: filePath, sizeMB: +(stat.size / 1048576).toFixed(1) });
+      return;
+    }
 
     this.watchedFiles.add(filePath);
     logger.info('New print file detected', { file: filePath, size: stat.size });
@@ -379,6 +420,11 @@ class SpoolWatcher extends EventEmitter {
 class JobExecutor {
   constructor() {
     this.sumatraPDFPath = this.findSumatraPDF();
+    // Cache printer port detection (WMI Get-CimInstance is slow — 10-40s on
+    // some boxes). Key = printer name, value = { host, port } | null.
+    // TTL keeps it fresh if a printer's port config changes.
+    this._portCache = new Map();
+    this._portCacheTtlMs = 10 * 60 * 1000; // 10 minutes
   }
 
   findSumatraPDF() {
@@ -401,24 +447,65 @@ class JobExecutor {
     try {
       const paper = job.paper || null; // { size, orientation, tray, customWidthMm, customHeightMm }
 
-      // ── Raw TCP data: send bytes directly to printer via Out-Printer ──
-      // Raw ESC/P data from Windows TCP/IP port can't be opened with Start-Process.
-      // We pipe the raw content through Out-Printer which sends it to the
-      // Windows print queue (the driver translates to ESC/P already).
+      // ── Raw data (ESC/P, raw TCP, etc.) ───────────────────────────────────
+      // Strategy:
+      //   1. Detect if the printer has a TCP/IP port (e.g. IP_192.168.1.x)
+      //   2. If yes → send raw bytes directly via TCP socket (bypass spooler)
+      //   3. If no (USB/local) → use Out-Printer (spooler required for USB)
+      //
+      // CRITICAL: only TRUE raw printer language (ESC/P, ESC/POS, PCL, ZPL) may
+      // go straight to port 9100. A document the Windows IPP driver rendered
+      // (PDF / PostScript / PWG-raster) is NOT printer language — sending it
+      // raw makes the printer spit out garbage symbols. So we sniff the magic
+      // bytes first and, if it's a document format, route it through the driver
+      // (SumatraPDF / spooler) which translates it into the printer's language.
       if (job.fileType === 'raw' || (job.filePath && job.filePath.endsWith('.raw'))) {
-        const psCmd = [
-          `$content = [System.IO.File]::ReadAllBytes('${job.filePath.replace(/'/g, "''")}')`,
-          `$printer = Get-Printer | Where-Object { $_.Name -eq '${(job.printer || '').replace(/'/g, "''")}' }`,
-          `if ($printer) {`,
-          `  $bytes = [System.IO.File]::ReadAllBytes('${job.filePath.replace(/'/g, "''")}')`,
-          `  # Write raw bytes to printer port via .NET RawPrint or Out-Printer`,
-          `  $tempText = [System.Text.Encoding]::Default.GetString($bytes)`,
-          `  $tempText | Out-Printer -Name '${(job.printer || '').replace(/'/g, "''")}'`,
-          `} else { Write-Error "Printer '${(job.printer || '').replace(/'/g, "''")}' not found" }`,
-        ].join('\r\n');
-        await execPS(psCmd);
-        logger.info('Job sent via raw→Out-Printer', { jobId: job.id, printer: job.printer });
-        return { success: true, method: 'raw-out-printer' };
+        const fileBytes = fs.readFileSync(job.filePath);
+
+        // Magic-byte sniff: is this actually a rendered document, not raw ESC/P?
+        const docFormat = this.detectDocumentFormat(fileBytes);
+        if (docFormat) {
+          logger.info('Raw job is actually a document — routing through driver, not raw TCP', {
+            jobId: job.id, printer: job.printer, format: docFormat, bytes: fileBytes.length
+          });
+          // Fall through to the document-printing paths below by re-dispatching
+          // with a corrected file type. PDF → SumatraPDF; everything else → PS path.
+          const docJob = { ...job, fileType: docFormat === 'pdf' ? 'pdf' : 'document', _isDocument: true };
+          return await this.printDocument(docJob, paper);
+        }
+
+        const printerEsc = (job.printer || '').replace(/'/g, "''");
+
+        // Try to detect TCP/IP port for this printer
+        const portInfo = await this.detectPrinterPort(printerEsc);
+
+        if (portInfo && portInfo.host) {
+          // ── Direct TCP send (bypass Windows Print Spooler) ──
+          // This preserves binary data integrity for ESC/P and other raw protocols.
+          const port = portInfo.port || 9100;
+          logger.info('Sending raw bytes via TCP direct', {
+            jobId: job.id, printer: job.printer,
+            host: portInfo.host, port, bytes: fileBytes.length
+          });
+          await this.sendRawTCP(portInfo.host, port, fileBytes, 15000);
+          logger.info('Raw TCP send complete', { jobId: job.id, printer: job.printer });
+          return { success: true, method: 'raw-tcp-direct', host: portInfo.host, port };
+        }
+
+        // ── Fallback: USB/local printer → WritePrinter with RAW datatype ──
+        // CRITICAL: Out-Printer / GDI re-encodes the byte stream through the
+        // printer driver, which DOUBLE-PROCESSES already-valid ESC/P data and
+        // produces garbage symbols on dot-matrix printers (e.g. EPSON LX-310).
+        // The correct way to send raw printer language to a USB/local printer
+        // is the Win32 spooler API (OpenPrinter → StartDocPrinter with
+        // datatype "RAW" → WritePrinter), which bypasses GDI entirely.
+        // Ref: Microsoft KB322090.
+        logger.info('No TCP port detected, sending via WritePrinter RAW (bypass GDI)', {
+          jobId: job.id, printer: job.printer, bytes: fileBytes.length
+        });
+        await this.writePrinterRaw(printerEsc, job.filePath);
+        logger.info('Job sent via WritePrinter RAW', { jobId: job.id, printer: job.printer });
+        return { success: true, method: 'writeprinter-raw' };
       }
 
       // Try SumatraPDF first (best for silent printing). SumatraPDF only
@@ -461,6 +548,253 @@ class JobExecutor {
       logger.error('Job execution failed', { jobId: job.id, error: err.message });
       return { success: false, error: err.message };
     }
+  }
+
+  /**
+   * Send raw bytes to a USB/local printer via the Win32 spooler API with the
+   * "RAW" datatype — OpenPrinter → StartDocPrinter(RAW) → WritePrinter →
+   * EndDocPrinter. This bypasses the GDI rendering path entirely, so already-
+   * valid printer language (ESC/P, ESC/POS, PCL) reaches the printer byte-for-
+   * byte instead of being re-encoded by the driver. Ref: Microsoft KB322090.
+   *
+   * Implemented with inline C# (Add-Type) because PowerShell can't P/Invoke
+   * winspool.drv cleanly otherwise. The file is read as raw bytes and pushed
+   * through unmodified.
+   */
+  async writePrinterRaw(printerName, filePath) {
+    // Build a C# helper that does the P/Invoke. Keep the C# in a here-string
+    // and pass printer name + file path as PowerShell variables (no string
+    // interpolation into the C# source → no escaping landmines).
+    const csharp = [
+      'using System;',
+      'using System.IO;',
+      'using System.Runtime.InteropServices;',
+      'public class RawPrinterHelper {',
+      '  [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Ansi)]',
+      '  public class DOCINFOA {',
+      '    [MarshalAs(UnmanagedType.LPStr)] public string pDocName;',
+      '    [MarshalAs(UnmanagedType.LPStr)] public string pOutputFile;',
+      '    [MarshalAs(UnmanagedType.LPStr)] public string pDataType;',
+      '  }',
+      '  [DllImport("winspool.Drv", EntryPoint="OpenPrinterA", SetLastError=true, CharSet=CharSet.Ansi)]',
+      '  public static extern bool OpenPrinter(string src, out IntPtr hPrinter, IntPtr pd);',
+      '  [DllImport("winspool.Drv", EntryPoint="ClosePrinter", SetLastError=true)]',
+      '  public static extern bool ClosePrinter(IntPtr hPrinter);',
+      '  [DllImport("winspool.Drv", EntryPoint="StartDocPrinterA", SetLastError=true, CharSet=CharSet.Ansi)]',
+      '  public static extern bool StartDocPrinter(IntPtr hPrinter, int level, [In] DOCINFOA di);',
+      '  [DllImport("winspool.Drv", EntryPoint="EndDocPrinter", SetLastError=true)]',
+      '  public static extern bool EndDocPrinter(IntPtr hPrinter);',
+      '  [DllImport("winspool.Drv", EntryPoint="StartPagePrinter", SetLastError=true)]',
+      '  public static extern bool StartPagePrinter(IntPtr hPrinter);',
+      '  [DllImport("winspool.Drv", EntryPoint="EndPagePrinter", SetLastError=true)]',
+      '  public static extern bool EndPagePrinter(IntPtr hPrinter);',
+      '  [DllImport("winspool.Drv", EntryPoint="WritePrinter", SetLastError=true)]',
+      '  public static extern bool WritePrinter(IntPtr hPrinter, IntPtr pBytes, int dwCount, out int dwWritten);',
+      '  public static bool SendBytes(string printerName, byte[] bytes) {',
+      '    IntPtr hPrinter; int written = 0; bool ok = false;',
+      '    DOCINFOA di = new DOCINFOA();',
+      '    di.pDocName = "PrintServer RAW Job"; di.pDataType = "RAW";',
+      '    if (!OpenPrinter(printerName, out hPrinter, IntPtr.Zero)) return false;',
+      '    try {',
+      '      if (!StartDocPrinter(hPrinter, 1, di)) return false;',
+      '      if (!StartPagePrinter(hPrinter)) return false;',
+      '      IntPtr p = Marshal.AllocCoTaskMem(bytes.Length);',
+      '      Marshal.Copy(bytes, 0, p, bytes.Length);',
+      '      ok = WritePrinter(hPrinter, p, bytes.Length, out written);',
+      '      Marshal.FreeCoTaskMem(p);',
+      '      EndPagePrinter(hPrinter); EndDocPrinter(hPrinter);',
+      '    } finally { ClosePrinter(hPrinter); }',
+      '    return ok && written == bytes.Length;',
+      '  }',
+      '}',
+    ].join('\n');
+
+    const psCmd = [
+      `$ErrorActionPreference = 'Stop'`,
+      `$src = @'`,
+      csharp,
+      `'@`,
+      `Add-Type -TypeDefinition $src -Language CSharp`,
+      `$bytes = [System.IO.File]::ReadAllBytes($env:PS_RAW_FILE)`,
+      `$ok = [RawPrinterHelper]::SendBytes($env:PS_RAW_PRINTER, $bytes)`,
+      `if (-not $ok) { throw "WritePrinter RAW failed for printer '$($env:PS_RAW_PRINTER)'" }`,
+      `Write-Output "RAW_OK"`,
+    ].join('\r\n');
+
+    // Pass printer name + path via environment variables to avoid any quoting
+    // issues with spaces/parentheses in the printer name (e.g. "LX-310 (Copy 1)").
+    // execPS resolves with trimmed stdout (string) on success, rejects on error.
+    const stdout = await execPS(psCmd, {
+      PS_RAW_PRINTER: printerName,
+      PS_RAW_FILE: filePath,
+    });
+    if (!/RAW_OK/.test(stdout || '')) {
+      throw new Error(`WritePrinter RAW did not confirm. Output: ${(stdout || '').slice(0, 200)}`);
+    }
+  }
+
+  /**
+   * Sniff magic bytes to tell whether a "raw" job is actually a rendered
+   * document (PDF / PostScript / PWG-raster) that the Windows IPP driver
+   * produced. Returns 'pdf' | 'ps' | 'pwg' | null (null = genuine raw ESC/P).
+   */
+  detectDocumentFormat(buf) {
+    if (!buf || buf.length < 4) return null;
+    // PDF: "%PDF"
+    if (buf[0] === 0x25 && buf[1] === 0x50 && buf[2] === 0x44 && buf[3] === 0x46) return 'pdf';
+    // PostScript: "%!PS" or EPSF "%!"
+    if (buf[0] === 0x25 && buf[1] === 0x21) return 'ps';
+    // PostScript with DOS preamble (0xC5 0xD0 0xD3 0xC6)
+    if (buf[0] === 0xC5 && buf[1] === 0xD0 && buf[2] === 0xD3 && buf[3] === 0xC6) return 'ps';
+    // PWG Raster: "RaS2" (big-endian) or "2SaR" (little-endian)
+    if (buf[0] === 0x52 && buf[1] === 0x61 && buf[2] === 0x53 && buf[3] === 0x32) return 'pwg';
+    if (buf[0] === 0x32 && buf[1] === 0x53 && buf[2] === 0x61 && buf[3] === 0x52) return 'pwg';
+    // Apple Raster: "UNIRAST\0"
+    if (buf.length >= 8 && buf.slice(0, 7).toString('latin1') === 'UNIRAST') return 'pwg';
+    return null; // genuine raw printer language → send to port 9100
+  }
+
+  /**
+   * Print a rendered document (PDF/PS/PWG) by routing through the printer
+   * driver, which translates it into the printer's native language. This is
+   * the OPPOSITE of raw TCP — we deliberately want the spooler/driver here.
+   * PDF goes through SumatraPDF; if SumatraPDF is missing we fall back to the
+   * shell's print verb. The temp file is given a proper extension so the tools
+   * recognise it.
+   */
+  async printDocument(job, paper) {
+    const ext = job.fileType === 'pdf' ? '.pdf'
+              : job.fileType === 'document' ? '.ps'
+              : '';
+    let docPath = job.filePath;
+    // Ensure the file has the right extension (SumatraPDF / Start-Process -Verb
+    // Print rely on it to pick the correct handler).
+    if (ext && !docPath.toLowerCase().endsWith(ext)) {
+      const newPath = docPath + ext;
+      try {
+        fs.copyFileSync(docPath, newPath);
+        docPath = newPath;
+      } catch (e) {
+        logger.warn('Could not rename doc for printing, using original', { error: e.message });
+      }
+    }
+
+    try {
+      // PDF via SumatraPDF — silent, reliable, honours paper size.
+      if (job.fileType === 'pdf' && this.sumatraPDFPath && fs.existsSync(docPath)) {
+        const printerArg = job.printer ? `-printer "${job.printer}"` : '';
+        const paperArg = paper && this.isSumatraBuiltin(paper.size) ? `-paper "${this.mapSumatraPaper(paper.size)}"` : '';
+        const settingsArg = paper && paper.orientation === 'landscape' ? '-landscape' : '';
+        const cmd = `"${this.sumatraPDFPath}" -print-to ${printerArg} ${paperArg} ${settingsArg} "${docPath}"`;
+        await new Promise((resolve, reject) => {
+          exec(cmd, { shell: true }, (err) => err ? reject(err) : resolve());
+        });
+        logger.info('Document printed via SumatraPDF', { jobId: job.id, format: job.fileType });
+        return { success: true, method: 'sumatra-doc', format: job.fileType };
+      }
+
+      // Fallback: shell print verb (uses the OS-registered handler → driver).
+      if (job.printer) {
+        const psCmd = [
+          `$h = Start-Process -FilePath '${docPath.replace(/'/g, "''")}' -Verb PrintTo -ArgumentList '${job.printer.replace(/'/g, "''")}' -PassThru -WindowStyle Hidden`,
+          `Start-Sleep -Seconds 3`,
+          `if ($h -and !$h.HasExited) { $h.CloseMainWindow() | Out-Null }`,
+        ].join("\r\n");
+        await execPS(psCmd);
+        logger.info('Document printed via shell PrintTo verb', { jobId: job.id, format: job.fileType });
+        return { success: true, method: 'shell-printto', format: job.fileType };
+      }
+
+      throw new Error('No printer specified and SumatraPDF unavailable for document printing');
+    } finally {
+      // Clean up the renamed copy (original is cleaned by the caller).
+      if (docPath !== job.filePath) {
+        try { fs.unlinkSync(docPath); } catch (e) { /* ignore */ }
+      }
+    }
+  }
+
+  /**
+   * Detect if a printer uses a TCP/IP port. Returns { host, port } or null.
+   * Queries Windows WMI for the printer's port configuration.
+   * Handles port names like "IP_192.168.1.100" or "192.168.1.100_1".
+   */
+  async detectPrinterPort(printerName) {
+    // Serve from cache when fresh — avoids slow repeat WMI queries.
+    const cached = this._portCache.get(printerName);
+    if (cached && (Date.now() - cached.ts) < this._portCacheTtlMs) {
+      logger.debug('Printer port from cache', { printerName, value: cached.value });
+      return cached.value;
+    }
+    try {
+      const psCmd = [
+        `$p = Get-CimInstance Win32_Printer -Filter "Name='${printerName.replace(/'/g, "''")}'" -ErrorAction SilentlyContinue`,
+        `if ($p) {`,
+        `  # Check Win32_TCPIPPrinterPort first (modern Windows)`,
+        `  $port = Get-CimInstance Win32_TCPIPPrinterPort -Filter "Name='$($p.PortName)'" -ErrorAction SilentlyContinue`,
+        `  if ($port -and $port.HostAddress) {`,
+        `    Write-Output ("TCP|" + $port.HostAddress + "|" + $port.PortNumber)`,
+        `  } else {`,
+        `    # Fallback: parse port name pattern IP_x.x.x.x or x.x.x.x_N`,
+        `    $name = $p.PortName`,
+        `    if ($name -match '^(?:IP_)?(\\d+\\.\\d+\\.\\d+\\.\\d+)(?:_(\\d+))?$') {`,
+        `      $ip = $Matches[1]`,
+        `      $port = if ($Matches[2]) { [int]$Matches[2] } else { 9100 }`,
+        `      Write-Output ("TCP|" + $ip + "|" + $port)`,
+        `    } else {`,
+        `      Write-Output "LOCAL|$($p.PortName)"`,
+        `    }`,
+        `  }`,
+        `} else { Write-Output "NOTFOUND" }`,
+      ].join('\r\n');
+      const result = await execPS(psCmd);
+      const line = (result.stdout || '').trim();
+      logger.debug('Printer port detection', { printerName, result: line });
+
+      if (line.startsWith('TCP|')) {
+        const parts = line.split('|');
+        const value = { host: parts[1], port: parseInt(parts[2]) || 9100 };
+        this._portCache.set(printerName, { ts: Date.now(), value });
+        return value;
+      }
+      this._portCache.set(printerName, { ts: Date.now(), value: null });
+      return null; // USB, local, or not found
+    } catch (err) {
+      logger.warn('Printer port detection failed', { printerName, error: err.message });
+      return null;
+    }
+  }
+
+  /**
+   * Send raw bytes to a TCP/IP endpoint (printer port 9100).
+   * Bypasses Windows Print Spooler entirely — data goes directly to the printer.
+   */
+  sendRawTCP(host, port, data, timeoutMs = 15000) {
+    return new Promise((resolve, reject) => {
+      const socket = new net.Socket();
+      const timer = setTimeout(() => {
+        socket.destroy();
+        reject(new Error(`TCP send to ${host}:${port} timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+
+      socket.connect(port, host, () => {
+        logger.debug('TCP connected to printer', { host, port });
+        socket.write(data, () => {
+          socket.end();
+        });
+      });
+
+      socket.on('close', () => {
+        clearTimeout(timer);
+        resolve();
+      });
+
+      socket.on('error', (err) => {
+        clearTimeout(timer);
+        socket.destroy();
+        reject(new Error(`TCP send to ${host}:${port} failed: ${err.message}`));
+      });
+    });
   }
 
   // Built-in names that SumatraPDF recognizes on its -paper flag
@@ -1095,7 +1429,62 @@ class PrintServerAgent {
 
 function main() {
   const args = process.argv.slice(2);
-  
+
+  // ─── Crash diagnostics ──────────────────────────────────────────────────
+  // Task runs as SYSTEM with no console, so exit 134 (SIGABRT, usually OOM or
+  // a fatal uncaught error) leaves no trace. Capture everything to agent.log.
+  logger.info('=== Agent process starting ===', {
+    version: AGENT_VERSION,
+    node: process.version,
+    pid: process.pid,
+    execPath: process.execPath,
+    logFile: LOG_FILE
+  });
+
+  process.on('uncaughtException', (err) => {
+    logger.error('FATAL uncaughtException', { message: err && err.message, stack: err && err.stack });
+    try { writeLogLine(`[FATAL] uncaughtException: ${err && err.stack ? err.stack : err}`); } catch (_) {}
+    // Give the file write a tick to flush, then exit so the task can be restarted.
+    setTimeout(() => process.exit(134), 250);
+  });
+
+  process.on('unhandledRejection', (reason) => {
+    const r = reason instanceof Error ? reason.stack : JSON.stringify(reason);
+    logger.error('unhandledRejection', { reason: r });
+  });
+
+  process.on('warning', (w) => {
+    logger.warn('process warning', { name: w.name, message: w.message, stack: w.stack });
+  });
+
+  process.on('exit', (code) => {
+    const mu = process.memoryUsage();
+    writeLogLine(`[${new Date().toISOString()}] [EXIT] code=${code} rss=${(mu.rss/1048576).toFixed(1)}MB heapUsed=${(mu.heapUsed/1048576).toFixed(1)}MB`);
+  });
+
+  // Memory sampler — logs RSS/heap every 60s so a leak shows as a rising trend
+  // before the eventual OOM abort. Unref so it never keeps the process alive.
+  const memTimer = setInterval(() => {
+    const mu = process.memoryUsage();
+    const rssMB = +(mu.rss / 1048576).toFixed(1);
+    logger.info('mem sample', {
+      rssMB,
+      heapUsedMB: +(mu.heapUsed / 1048576).toFixed(1),
+      heapTotalMB: +(mu.heapTotal / 1048576).toFixed(1),
+      externalMB: +(mu.external / 1048576).toFixed(1)
+    });
+    // Circuit-breaker: a healthy agent sits at ~60MB RSS. If it ever crosses
+    // 600MB something is leaking. Exit cleanly NOW (well below the ~2GB heap
+    // ceiling that triggers SIGABRT/exit 134) so the Scheduled Task relaunches
+    // us in seconds instead of the node sitting silently dead for ~24 min.
+    if (rssMB > 600) {
+      logger.error('Memory circuit-breaker tripped — restarting agent', { rssMB });
+      // exit 0 so the relaunch is treated as a clean restart by the task.
+      setTimeout(() => process.exit(0), 250);
+    }
+  }, 60 * 1000);
+  if (memTimer.unref) memTimer.unref();
+
   // Check for --config argument
   const configArg = args.find(arg => arg.startsWith('--config='));
   if (configArg) {
@@ -1124,6 +1513,12 @@ function main() {
     console.error('Failed to start agent:', err);
     process.exit(1);
   });
+
+  // Write version.txt for the batch manager to read
+  const versionFile = path.join(path.dirname(process.execPath || process.argv[1]), 'version.txt');
+  try {
+    fs.writeFileSync(versionFile, AGENT_VERSION, 'utf8');
+  } catch (e) { /* non-fatal */ }
 
   // Start auto-updater (no-op when running unpackaged / no serverUrl)
   const updater = new AutoUpdater({
