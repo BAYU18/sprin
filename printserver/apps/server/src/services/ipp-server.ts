@@ -88,6 +88,9 @@ export class IPPServer {
     private getKnex: () => any;
     private getIO: () => any;
     private jobWaiters: Map<string, (result: any) => void> = new Map();
+    // Opsi C: one RAW TCP listener per printer raw_port. Map<raw_port, server>.
+    private rawServers: Map<number, net.Server> = new Map();
+    private rawRefreshTimer: NodeJS.Timeout | null = null;
 
     constructor(opts: { getKnex: () => any; getIO: () => any }) {
         this.getKnex = opts.getKnex;
@@ -100,8 +103,76 @@ export class IPPServer {
             this.server.listen(IPP_PORT, IPP_HOST, () => {
                 logger.info(`[IPP] Server listening on ${IPP_HOST}:${IPP_PORT}`);
                 logger.info(`[IPP] Users can add printers with URL: ipp://<server-ip>:${IPP_PORT}/printers/<slug>`);
+                // Opsi C: open per-printer RAW listeners, then keep them in sync
+                // with the DB (printers come/go as nodes connect) every 60s.
+                this.syncRawListeners().catch((e) =>
+                    logger.error(`[RAW] initial listener sync failed: ${(e as Error).message}`));
+                this.rawRefreshTimer = setInterval(() => {
+                    this.syncRawListeners().catch((e) =>
+                        logger.warn(`[RAW] listener sync failed: ${(e as Error).message}`));
+                }, 60 * 1000);
+                if (this.rawRefreshTimer.unref) this.rawRefreshTimer.unref();
                 resolve();
             });
+        });
+    }
+
+    /**
+     * Opsi C — reconcile RAW TCP listeners with the printers table.
+     * Each printer that has a raw_port gets a dedicated net.Server on that port.
+     * A connection to port N is routed to the printer whose raw_port = N, so
+     * multi-printer-per-node works with zero name-hint guessing.
+     */
+    private async syncRawListeners(): Promise<void> {
+        const knex = this.getKnex();
+        const rows: Array<{ raw_port: number }> = await knex('printers')
+            .whereNotNull('raw_port')
+            .whereNotNull('client_id')
+            .select('raw_port');
+        const wanted = new Set<number>(
+            rows.map((r) => Number(r.raw_port)).filter((p) => Number.isInteger(p) && p > 0)
+        );
+
+        // Open listeners we don't have yet.
+        for (const port of Array.from(wanted)) {
+            if (this.rawServers.has(port)) continue;
+            const srv = net.createServer((socket) => this.handleRawSocket(socket, port));
+            srv.on('error', (err) => {
+                logger.error(`[RAW] listener on :${port} error: ${(err as Error).message}`);
+                this.rawServers.delete(port);
+                try { srv.close(); } catch { /* ignore */ }
+            });
+            srv.listen(port, IPP_HOST, () => {
+                logger.info(`[RAW] listening on ${IPP_HOST}:${port} → routed to printer raw_port=${port}`);
+            });
+            this.rawServers.set(port, srv);
+        }
+
+        // Close listeners for ports no longer present in the DB.
+        for (const [port, srv] of Array.from(this.rawServers)) {
+            if (!wanted.has(port)) {
+                try { srv.close(); } catch { /* ignore */ }
+                this.rawServers.delete(port);
+                logger.info(`[RAW] closed stale listener on :${port}`);
+            }
+        }
+    }
+
+    /**
+     * Collect a RAW socket's full payload (Windows Standard TCP/IP RAW port)
+     * and route by the LOCAL port it arrived on — that uniquely identifies the
+     * target printer (raw_port). Replaces the old name-hint guessing.
+     */
+    private handleRawSocket(socket: net.Socket, listenPort: number) {
+        const peer = `${socket.remoteAddress}:${socket.remotePort}`;
+        const chunks: Buffer[] = [];
+        socket.on('data', (c) => chunks.push(c));
+        socket.on('error', (err) => logger.warn(`[RAW] socket error from ${peer} on :${listenPort}: ${err.message}`));
+        socket.on('end', () => {
+            const data = Buffer.concat(chunks);
+            if (data.length === 0) { socket.end(); return; }
+            this.routeRawToPrinter(socket, data, peer, listenPort)
+                .catch((e) => logger.error(`[RAW] route error :${listenPort}: ${(e as Error).message}`));
         });
     }
 
@@ -119,12 +190,16 @@ export class IPPServer {
         const io = this.getIO();
         if (!io) throw new Error('Socket.IO not available');
 
-        // Wait for agent to send back result
+        // Wait for agent to send back result. 90s ceiling: the agent's WMI port
+        // detection (Get-CimInstance) can be slow on Windows boxes with many
+        // printers, and the actual spool/TCP send adds more. A too-short timeout
+        // makes the server report "failed" while the printer actually prints —
+        // the worst kind of false negative.
         return new Promise((resolve, reject) => {
             const timeout = setTimeout(() => {
                 this.jobWaiters.delete(String(payload.jobId));
-                reject(new Error('Print job timed out after 30s'));
-            }, 30000);
+                reject(new Error('Print job timed out after 90s (agent did not report back)'));
+            }, 90000);
 
             this.jobWaiters.set(String(payload.jobId), (result) => {
                 clearTimeout(timeout);
@@ -135,6 +210,84 @@ export class IPPServer {
             io.to(`client:${clientId}`).emit('print:execute', payload);
             logger.info(`[IPP] Job ${payload.jobId} dispatched to client:${clientId} room`);
         });
+    }
+
+    /**
+     * Opsi C — route a RAW payload to the printer that owns `listenPort`
+     * (printers.raw_port). Deterministic per-printer routing, no name guessing.
+     */
+    private async routeRawToPrinter(socket: net.Socket, data: Buffer, peer: string, listenPort: number) {
+        const knex = this.getKnex();
+        try {
+            const printer = await knex('printers')
+                .leftJoin('clients', 'printers.client_id', 'clients.id')
+                .select('printers.*', 'clients.ip_address as client_ip')
+                .where('printers.raw_port', listenPort)
+                .first();
+
+            if (!printer) {
+                logger.warn(`[RAW] :${listenPort} from ${peer} — no printer mapped to this port`);
+                socket.end();
+                return;
+            }
+            if (!printer.client_id) {
+                logger.warn(`[RAW] :${listenPort} printer ${printer.name} not bound to a node`);
+                socket.end();
+                return;
+            }
+            if (printer.status !== 'online') {
+                logger.warn(`[RAW] :${listenPort} printer ${printer.name} is ${printer.status} — dropping job`);
+                socket.end();
+                return;
+            }
+
+            const fileName = `raw-${Date.now()}`;
+            const base64Data = data.toString('base64');
+            logger.info(`[RAW] :${listenPort} ${peer} → printer=${printer.name} (id=${printer.id}, client=${printer.client_id}) bytes=${data.length}`);
+
+            const [job] = await knex('print_jobs')
+                .insert({
+                    user_id: 1,
+                    client_id: printer.client_id,
+                    printer_id: printer.id,
+                    job_name: fileName,
+                    file_name: fileName,
+                    file_path: 'raw-tcp',
+                    file_type: 'raw',
+                    file_size: data.length,
+                    paper_size: 'Default',
+                    copies: 1,
+                    status: 'processing',
+                    priority: 'normal',
+                    source_app: 'raw-tcp',
+                    started_at: new Date()
+                })
+                .returning(['id']);
+
+            const result = await this.forwardToAgent(printer.client_id, {
+                jobId: job.id,
+                action: 'print',
+                printerName: printer.name,
+                fileName,
+                copies: 1,
+                fileType: 'raw',
+                fileData: base64Data,
+                paper: null,
+            });
+
+            await knex('print_jobs')
+                .where({ id: job.id })
+                .update({
+                    status: result.success ? 'completed' : 'failed',
+                    error_message: result.success ? null : result.error,
+                    completed_at: new Date()
+                });
+
+            logger.info(`[RAW] :${listenPort} → job ${job.id} ${result.success ? 'OK' : 'FAILED: ' + result.error}`);
+        } catch (err) {
+            logger.error(`[RAW] :${listenPort} ${peer} error: ${(err as Error).message}`);
+        }
+        socket.end();
     }
 
     /**
@@ -649,6 +802,15 @@ export class IPPServer {
             const base64Data = data.toString('base64');
 
             logger.info(`[RAW] ${peer} → printer=${printer.name} (id=${printer.id}, client=${printer.client_id}) bytes=${data.length}`);
+            // Diagnostic: dump first 64 bytes as hex + ASCII so we can see the
+            // actual wire format (ESC/P starts with 1B 40; PDF=%PDF; PS=%!).
+            {
+                const head = data.slice(0, 64);
+                const hex = head.toString('hex').replace(/(..)/g, '$1 ').trim();
+                const ascii = head.toString('latin1').replace(/[^\x20-\x7e]/g, '.');
+                logger.info(`[RAW][HEXDUMP] ${peer} first64-hex: ${hex}`);
+                logger.info(`[RAW][HEXDUMP] ${peer} first64-ascii: ${ascii}`);
+            }
 
             // Insert job
             const [job] = await knex('print_jobs')

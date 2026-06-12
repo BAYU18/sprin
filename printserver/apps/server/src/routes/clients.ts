@@ -2,6 +2,7 @@ import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { generatePrinterSlug, ensureUniquePrinterSlug } from '../utils/printer-slug.js';
 import { cache, cacheKeys } from '../utils/cache.js';
+import * as healthMonitor from '../services/health-monitor.js';
 
 const clientSchema = z.object({
     hostname: z.string().optional(),
@@ -377,6 +378,13 @@ export async function setupClientsRoutes(fastify: FastifyInstance) {
                         fastify.knex,
                         `${generatePrinterSlug(trimmedName)}-${hostToken}`
                     );
+
+                    // Opsi C: allocate a dedicated RAW TCP port (9100+) so the
+                    // Windows client can install a Standard TCP/IP port that maps
+                    // to exactly this printer. MAX(raw_port)+1, floor 9100.
+                    const rawPortRow = await fastify.knex('printers').max('raw_port as maxPort').first();
+                    const nextRawPort = Math.max(9100, (Number(rawPortRow?.maxPort) || 9099) + 1);
+
                     const [newId] = await fastify.knex('printers')
                         .insert({
                             name: trimmedName,
@@ -387,6 +395,7 @@ export async function setupClientsRoutes(fastify: FastifyInstance) {
                             status: status === 'online' ? 'online' : 'offline',
                             client_id: id,
                             slug,
+                            raw_port: nextRawPort,
                             created_at: new Date(),
                             updated_at: new Date()
                         }).returning('id');
@@ -435,6 +444,29 @@ export async function setupClientsRoutes(fastify: FastifyInstance) {
             // though the node is online — the exact "node RUNNING but printer red"
             // bug. Invalidate so the next GET /api/printers reloads fresh from DB.
             await cache.invalidate(cacheKeys.printersList('default'));
+
+            // TIER-2 #6: record a health snapshot for every printer on this
+            // node, populating the previously-orphaned printer_health table.
+            // Each entry writes one row per metric (status + optional
+            // response_time_ms if the agent supplied it). We pull the freshest
+            // printer rows so we get the canonical id+name+status, and also
+            // check the offline-threshold rule which may create a critical
+            // alert if 3+ consecutive status rows are 'offline'.
+            try {
+                const finalRows: Array<{ id: number; name: string; status: string }> =
+                    await fastify.knex('printers')
+                        .where({ client_id: id })
+                        .select('id', 'name', 'status');
+                for (const row of finalRows) {
+                    await healthMonitor.recordHealthSnapshot(fastify, row.id, {
+                        status: row.status,
+                        recorded_at: new Date(),
+                    });
+                    await healthMonitor.checkAlertThresholds(fastify, row.id, row.status);
+                }
+            } catch (err) {
+                logger.warn(`[Heartbeat] Health snapshot write failed for client ${id}: ${(err as Error).message}`);
+            }
         }
 
         if (status === 'online') {

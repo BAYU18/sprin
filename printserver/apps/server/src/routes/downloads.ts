@@ -103,6 +103,11 @@ export async function setupDownloadsRoutes(fastify: FastifyInstance) {
     fastify.get('/downloads/manage-agent.bat',
         serveScriptDynamic(AGENT_MANAGER_PATH, 'Manage-PrintServer-Agent.bat'));
 
+    // Agent updater PowerShell script — does the heavy lifting for menu [9]
+    const AGENT_UPDATER_PATH = '/root/serverbot/print/printserver/apps/server/public/downloads/update-agent.ps1';
+    fastify.get('/downloads/update-agent.ps1',
+        serveScriptDynamic(AGENT_UPDATER_PATH, 'update-agent.ps1', 'text/plain'));
+
     // PowerShell script to bulk-add all printers from server
     const PS_SCRIPT_PATH = '/root/serverbot/print/printserver/docs/add-all-printers.ps1';
     const SNIPPETS_PATH = '/root/serverbot/print/printserver/docs/printer-snippets.txt';
@@ -313,10 +318,13 @@ export async function setupDownloadsRoutes(fastify: FastifyInstance) {
         try {
             const row = await (fastify as any).knex('printers')
                 .leftJoin('clients', 'printers.client_id', 'clients.id')
+                .leftJoin('printer_drivers', 'printers.driver_id', 'printer_drivers.id')
                 .select(
                     'printers.name as name',
                     'printers.slug as slug',
+                    'printers.raw_port as raw_port',
                     'clients.hostname as node',
+                    'printer_drivers.name as driver',
                 )
                 .whereRaw('LOWER(printers.slug) = ?', [slug.toLowerCase()])
                 .first();
@@ -334,19 +342,21 @@ export async function setupDownloadsRoutes(fastify: FastifyInstance) {
             const serverIp = process.env.SERVER_LAN_IP
                 || process.env.PUBLIC_IP
                 || (hostIsUsable ? hostHeader : '192.168.1.141');
-            const ippUrl = `ipp://${serverIp}:631/printers/${row.slug}`;
-            // Driver priority: match exact printer model from database driver
-            // field → fallback to generic IPP class driver.  Nodes should
-            // register their driver name (e.g. "EPSON LX-310 ESC/P") so the
-            // .bat can use the exact matching driver on the client PC.
-            const driver = (row.driver && String(row.driver).trim()) || 'Microsoft IPP Class Driver';
+            // Opsi C: each printer has a dedicated RAW TCP port on the server.
+            // The client installs a Standard TCP/IP (RAW) port → <serverIp>:<rawPort>
+            // which routes deterministically to THIS printer server-side.
+            const rawPort = Number(row.raw_port) || 9100;
+            // Driver: use the model-specific driver assigned in the DB (via JOIN).
+            // Fallback to the Epson ESC/P-R class driver which is what proved to
+            // work for the LX-310 over TCP/IP. Generic IPP class driver is a last
+            // resort and only valid if actually installed on the client PC.
+            const driver = (row.driver && String(row.driver).trim()) || 'Epson ESC/P-R V4 Class Driver';
             // Sanitize for safe embedding in the .bat (printer names can contain
             // spaces/parens — fine inside quotes, but strip CR/LF, %, and /
             // (forward-slash breaks Windows Print Spooler name resolution).
             const safeName = String(row.name).replace(/[\r\n%/]/g, ' ').replace(/\s+/g, ' ').trim();
-            const httpUrl = ippUrl.replace(/^ipp:/, 'http:');
-            // Extract server IP from IPP URL for connectivity test
-            const serverHost = ippUrl.replace(/^ipp:\/\//, '').split(':')[0];
+            // Windows port name convention for a Standard TCP/IP RAW port.
+            const portName = `${serverIp}_${rawPort}`;
 
             const bat = [
                 '@echo off',
@@ -355,16 +365,16 @@ export async function setupDownloadsRoutes(fastify: FastifyInstance) {
                 `:: Printer : ${safeName}`,
                 `:: Original: ${row.name}`,
                 `:: Node    : ${row.node || 'unknown'}`,
-                `:: Port    : ${ippUrl}`,
+                `:: Port    : RAW ${serverIp}:${rawPort}`,
                 ':: ============================================================',
                 'setlocal EnableDelayedExpansion',
                 `title Pasang Printer - ${safeName}`,
                 '',
                 `set "PRINTER_NAME=${safeName}"`,
-                `set "IPP_URL=${ippUrl}"`,
-                `set "HTTP_URL=${httpUrl}"`,
+                `set "SERVER_HOST=${serverIp}"`,
+                `set "RAW_PORT=${rawPort}"`,
+                `set "PORT_NAME=${portName}"`,
                 `set "DRIVER=${driver}"`,
-                `set "SERVER_HOST=${serverHost}"`,
                 '',
                 ':: --- Pastikan hak Administrator ---',
                 'net session >nul 2>&1',
@@ -381,35 +391,35 @@ export async function setupDownloadsRoutes(fastify: FastifyInstance) {
                 'echo   MEMASANG PRINTER',
                 'echo ==============================================================',
                 'echo  Nama   : !PRINTER_NAME!',
-                'echo  Port   : !IPP_URL!',
+                'echo  Port   : RAW !SERVER_HOST!:!RAW_PORT!',
                 'echo  Driver : !DRIVER!',
                 'echo --------------------------------------------------------------',
                 'echo.',
                 '',
-                ':: --- [0/3] Test koneksi ke IPP server ---',
-                'echo  [0/3] Menguji koneksi ke !SERVER_HOST!:631...',
-                `powershell -NoProfile -Command "$t=Test-NetConnection -ComputerName '!SERVER_HOST!' -Port 631 -WarningAction SilentlyContinue; if($t.TcpTestSucceeded){ exit 0 } else { exit 1 }" >nul 2>&1`,
+                ':: --- [0/4] Test koneksi ke port RAW printer ---',
+                'echo  [0/4] Menguji koneksi ke !SERVER_HOST!:!RAW_PORT!...',
+                `powershell -NoProfile -Command "$t=Test-NetConnection -ComputerName '!SERVER_HOST!' -Port !RAW_PORT! -WarningAction SilentlyContinue; if($t.TcpTestSucceeded){ exit 0 } else { exit 1 }" >nul 2>&1`,
                 'if not !errorLevel! == 0 (',
-                '    echo        [GAGAL] Tidak bisa terhubung ke !SERVER_HOST!:631',
+                '    echo        [GAGAL] Tidak bisa terhubung ke !SERVER_HOST!:!RAW_PORT!',
                 '    echo.',
                 '    echo  Pastikan:',
                 '    echo   - Server PrintServer aktif',
-                '    echo   - Port 631 tidak diblokir firewall',
+                '    echo   - Port !RAW_PORT! tidak diblokir firewall',
                 '    echo   - Komputer dalam jaringan yang sama',
                 '    echo.',
-                '    echo  Test manual: powershell "Test-NetConnection !SERVER_HOST! -Port 631"',
+                '    echo  Test manual: powershell "Test-NetConnection !SERVER_HOST! -Port !RAW_PORT!"',
                 '    echo.',
                 '    pause',
                 '    exit /b 1',
                 ')',
                 'echo        [OK] Koneksi OK.',
                 '',
-                'echo  [1/3] Membuat port IPP...',
-                `powershell -NoProfile -Command "if (-not (Get-PrinterPort -Name '!IPP_URL!' -ErrorAction SilentlyContinue)) { Add-PrinterPort -Name '!IPP_URL!' }" >nul 2>&1`,
+                'echo  [1/4] Membuat Standard TCP/IP port (RAW)...',
+                `powershell -NoProfile -Command "if (-not (Get-PrinterPort -Name '!PORT_NAME!' -ErrorAction SilentlyContinue)) { Add-PrinterPort -Name '!PORT_NAME!' -PrinterHostAddress '!SERVER_HOST!' -PortNumber !RAW_PORT! }" >nul 2>&1`,
                 'if !errorLevel! == 0 (echo        [OK] Port siap.) else (echo        [!] Port mungkin sudah ada, lanjut.)',
                 '',
-                'echo  [2/3] Memasang printer...',
-                `powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $n='!PRINTER_NAME!'; $p='!IPP_URL!'; $d='!DRIVER!'; $ex=Get-Printer -Name $n -ErrorAction SilentlyContinue; if($ex){ if($ex.PortName -ne $p){ Remove-Printer -Name $n -ErrorAction SilentlyContinue; Add-Printer -Name $n -DriverName $d -PortName $p } } else { Add-Printer -Name $n -DriverName $d -PortName $p }; exit $LASTEXITCODE } catch { Write-Error $_.Exception.Message; exit 1 }" 2>%TEMP%\\ps_addprn_err.txt`,
+                'echo  [2/4] Memasang printer...',
+                `powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $n='!PRINTER_NAME!'; $p='!PORT_NAME!'; $d='!DRIVER!'; $ex=Get-Printer -Name $n -ErrorAction SilentlyContinue; if($ex){ Remove-Printer -Name $n -ErrorAction SilentlyContinue }; Add-Printer -Name $n -DriverName $d -PortName $p -ErrorAction Stop; exit 0 } catch { Write-Error $_.Exception.Message; exit 1 }" 2>%TEMP%\\ps_addprn_err.txt`,
                 'if !errorLevel! == 0 (',
                 '    echo        [OK] Perintah pasang dikirim.',
                 ') else (',
@@ -418,11 +428,18 @@ export async function setupDownloadsRoutes(fastify: FastifyInstance) {
                 '    echo  Pesan error:',
                 '    type %TEMP%\\ps_addprn_err.txt 2>nul',
                 '    echo.',
+                '    echo  Kemungkinan: driver "!DRIVER!" belum terpasang di PC ini.',
+                '    echo  Pasang driver printer dulu, lalu jalankan ulang.',
+                '    echo.',
                 '    pause',
                 '    exit /b 1',
                 ')',
                 '',
-                'echo  [3/3] Verifikasi...',
+                'echo  [3/4] Mematikan bidirectional (hilangkan balon communication error)...',
+                'rundll32 printui.dll,PrintUIEntry /Xs /n "!PRINTER_NAME!" EnableBIDI disable >nul 2>&1',
+                'echo        [OK] Bidirectional dimatikan.',
+                '',
+                'echo  [4/4] Verifikasi...',
                 'timeout /t 3 /nobreak >nul',
                 `powershell -NoProfile -Command "if (Get-Printer -Name '!PRINTER_NAME!' -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }" >nul 2>&1`,
                 'if !errorLevel! == 0 (',
