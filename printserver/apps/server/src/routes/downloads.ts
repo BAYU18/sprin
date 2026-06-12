@@ -233,7 +233,17 @@ export async function setupDownloadsRoutes(fastify: FastifyInstance) {
                 const row = await (fastify as any).knex('clients')
                     .whereRaw('LOWER(hostname) = ?', [hostname.toLowerCase()])
                     .first();
-                if (row) (fastify as any).io?.emit('client:offline', { clientId: row.id });
+                if (row) {
+                    // Node mati = printernya tak mungkin online. Turunkan statusnya juga.
+                    const printersOff = await (fastify as any).knex('printers')
+                        .where({ client_id: row.id })
+                        .whereIn('status', ['online', 'busy'])
+                        .update({ status: 'offline', updated_at: new Date() });
+                    (fastify as any).io?.emit('client:offline', { clientId: row.id });
+                    if (printersOff > 0) {
+                        (fastify as any).io?.emit('printer:patch', { client_id: row.id, status: 'offline' });
+                    }
+                }
             } catch { /* socket emit is best-effort */ }
 
             return reply.send({ ok: updated > 0, offline: true });

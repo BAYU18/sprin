@@ -468,6 +468,15 @@ export class CentralPrintRouter {
                 .where({ id: nodeId })
                 .update({ is_online: false, updated_at: new Date() });
 
+            // Node mati = printernya tak mungkin online. Turunkan statusnya juga.
+            const printersOff = await this.fastify.knex('printers')
+                .where({ client_id: nodeId })
+                .whereIn('status', ['online', 'busy'])
+                .update({ status: 'offline', updated_at: new Date() });
+            if (printersOff > 0) {
+                this.fastify.io?.emit('printer:patch', { client_id: nodeId, status: 'offline' });
+            }
+
             const nodeName = node.hostname || `client-${nodeId}`;
 
             // Emit alert

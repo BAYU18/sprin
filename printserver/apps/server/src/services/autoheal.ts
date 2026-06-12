@@ -156,9 +156,20 @@ async function clearStaleNodes(fastify: any) {
             .where({ id: node.id })
             .update({ is_online: false, updated_at: new Date() });
 
+        // Node mati = semua printernya tidak mungkin online. Turunkan status
+        // printer yang masih 'online'/'busy' jadi 'offline' biar dashboard konsisten.
+        const printersOff = await fastify.knex('printers')
+            .where({ client_id: node.id })
+            .whereIn('status', ['online', 'busy'])
+            .update({ status: 'offline', updated_at: new Date() });
+
         fastify.io?.emit('client:offline', { clientId: node.id });
+        if (printersOff > 0) {
+            // Beri tahu dashboard agar daftar printer ikut ter-update real-time.
+            fastify.io?.emit('printer:patch', { client_id: node.id, status: 'offline' });
+        }
         logger.warn(
-            `[AutoHeal] Node ${node.hostname} (id=${node.id}) marked offline — no heartbeat since ${node.last_seen || 'never'}`
+            `[AutoHeal] Node ${node.hostname} (id=${node.id}) marked offline — no heartbeat since ${node.last_seen || 'never'}${printersOff ? ` (+${printersOff} printer→offline)` : ''}`
         );
     }
     if (stale.length) {
