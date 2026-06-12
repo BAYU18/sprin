@@ -89,6 +89,11 @@ export async function setupDriversRoutes(fastify: FastifyInstance) {
     });
 
     // ── Upload new driver ZIP ────────────────────────────────────────────────
+    // Dipakai oleh: (a) upload manual dari dashboard, dan (b) HARVEST otomatis
+    // dari agent node (mis. IT-99 mengirim driver Zebra yang sudah terpasang).
+    // Saat di-harvest, agent menyertakan source_client_id + windows_driver_name +
+    // original_printer_name supaya driver tersimpan sebagai cadangan dan bisa
+    // di-assign manual ke printer model sama di node baru kelak.
     fastify.post('/api/drivers/upload', async (request: FastifyRequest, reply: FastifyReply) => {
         const uploadSchema = z.object({
             name: z.string().min(1).max(255),
@@ -96,7 +101,11 @@ export async function setupDriversRoutes(fastify: FastifyInstance) {
             description: z.string().optional(),
             install_instructions: z.string().optional(),
             filename: z.string().min(1),
-            fileData: z.string() // base64 string
+            fileData: z.string(), // base64 string
+            // Harvest metadata (opsional — hanya diisi saat upload dari agent)
+            source_client_id: z.number().int().nullable().optional(),
+            windows_driver_name: z.string().max(255).optional(),
+            original_printer_name: z.string().max(255).optional(),
         });
 
         const body = uploadSchema.parse(request.body);
@@ -115,6 +124,7 @@ export async function setupDriversRoutes(fastify: FastifyInstance) {
         const safeFilename = `${Date.now()}_${body.filename.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
         // Path absolut ke public/drivers
         const uploadDir = path.resolve('/root/serverbot/print/printserver/apps/server/public/drivers');
+        if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
         const fullPath = path.join(uploadDir, safeFilename);
 
         // Tulis file
@@ -131,13 +141,49 @@ export async function setupDriversRoutes(fastify: FastifyInstance) {
                 install_instructions: body.install_instructions || null,
                 download_url: downloadUrl,
                 is_builtin: false,
+                source_client_id: body.source_client_id ?? null,
+                windows_driver_name: body.windows_driver_name || null,
+                original_printer_name: body.original_printer_name || null,
                 updated_at: new Date(),
             })
             .returning('*');
 
         fastify.io?.emit('driver:created', driver);
-        logger.info(`[Drivers] Uploaded and created driver: ${driver.name} -> ${downloadUrl}`);
+        logger.info(`[Drivers] Uploaded and created driver: ${driver.name} -> ${downloadUrl}`
+            + (body.source_client_id ? ` (harvested from client ${body.source_client_id})` : ''));
         return driver;
+    });
+
+    // ── Trigger HARVEST: minta agent node export driver sebuah printer ───────
+    // Dashboard memanggil ini; server meneruskan perintah ke agent via Socket.IO
+    // (room client:<id>). Agent akan export driver Windows, zip, lalu upload
+    // balik ke /api/drivers/upload. Hasil akhir dipancarkan via 'driver:harvest:result'.
+    fastify.post('/api/drivers/harvest', async (request: FastifyRequest, reply: FastifyReply) => {
+        const body = z.object({
+            client_id: z.number().int(),
+            printer_name: z.string().min(1),
+            printer_id: z.number().int().optional(),
+        }).parse(request.body);
+
+        const client = await fastify.knex('clients').where({ id: body.client_id }).first();
+        if (!client) {
+            return reply.status(404).send({ error: 'Node tidak ditemukan' });
+        }
+        if (!client.is_online) {
+            return reply.status(409).send({ error: `Node ${client.hostname} sedang offline — tidak bisa harvest driver` });
+        }
+
+        const requestId = `harvest-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+        // Kirim perintah ke agent yang berada di room client:<id>
+        fastify.io?.to(`client:${body.client_id}`).emit('driver:harvest', {
+            requestId,
+            printerName: body.printer_name,
+            printerId: body.printer_id ?? null,
+        });
+
+        logger.info(`[Drivers] Harvest dipicu untuk printer "${body.printer_name}" di node ${client.hostname} (req=${requestId})`);
+        return { success: true, requestId, message: `Perintah harvest dikirim ke ${client.hostname}` };
     });
 
     // ── Update driver ───────────────────────────────────────────────────────

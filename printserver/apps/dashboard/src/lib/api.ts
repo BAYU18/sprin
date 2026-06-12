@@ -70,6 +70,28 @@ export const printers = {
   jobs: (id: number, params?: any) => api.get(`/api/printers/${id}/jobs`, { params }),
   testPrint: (id: number) => api.post(`/api/printers/${id}/test-print`),
   clearQueue: (id: number) => api.post(`/api/printers/${id}/clear-queue`),
+  // TIER-2 #8: queue management
+  getQueue: (id: number) => api.get(`/api/queues/printer/${id}`),
+  getQueueStatus: (id: number) => api.get(`/api/queues/printer/${id}/status`),
+  pauseQueue: (id: number) => api.post(`/api/queues/printer/${id}/pause`),
+  resumeQueue: (id: number) => api.post(`/api/queues/printer/${id}/resume`),
+};
+
+// TIER-2 #8: queue management
+export const queues = {
+  list: (params?: any) => api.get('/api/queues', { params }),
+  reorder: (queueId: number, newPosition: number) =>
+    api.post(`/api/queues/${queueId}/reorder`, { new_position: newPosition }),
+};
+
+// TIER-2 #6: health monitoring
+export const health = {
+  allPrinters: () => api.get('/api/health/printers'),
+  printer: (id: number) => api.get(`/api/health/printers/${id}`),
+  history: (id: number, metric: string = 'status', days: number = 7) =>
+    api.get(`/api/health/printers/${id}/history`, { params: { metric, days } }),
+  snapshot: (id: number, body?: any) => api.post(`/api/health/printers/${id}/snapshot`, body || {}),
+  checkAll: () => api.post('/api/health/check-all'),
 };
 
 export const jobs = {
@@ -187,6 +209,9 @@ export const drivers = {
   // Rank best driver candidates for a single printer (no write).
   suggest: (printerId: number) =>
     api.get(`/api/printers/${printerId}/driver/suggest`),
+  // Harvest: minta node export driver printer & upload ke server sebagai cadangan.
+  harvest: (clientId: number, printerName: string, printerId?: number) =>
+    api.post('/api/drivers/harvest', { client_id: clientId, printer_name: printerName, printer_id: printerId }),
 };
 
 export default api;

@@ -123,6 +123,44 @@ function execPS(command, extraEnv) {
   });
 }
 
+/**
+ * Resolve the PRIMARY network adapter's IPv4 + MAC the way Windows itself does —
+ * the adapter that owns the default gateway (i.e. the active LAN/internet
+ * connection shown at the top of `ipconfig` / in Control Panel). This avoids
+ * picking a virtual adapter (VirtualBox/VMware/Hyper-V/VPN — all 192.168.x.x)
+ * which os.networkInterfaces() often lists first.
+ *
+ * Strategy:
+ *   1. Get-NetIPConfiguration → first adapter that has an IPv4DefaultGateway AND
+ *      is physically Up. This is exactly the "topmost active" connection.
+ *   2. Fallback: Get-NetRoute 0.0.0.0/0 ordered by RouteMetric → resolve its IP.
+ * Returns { ip, mac } or null if PowerShell is unavailable (very old Windows).
+ */
+async function resolvePrimaryNetwork() {
+  if (os.platform() !== 'win32') return null;
+  try {
+    const ps = `
+$ErrorActionPreference='SilentlyContinue';
+$cfg = Get-NetIPConfiguration | Where-Object { $_.IPv4DefaultGateway -ne $null -and $_.NetAdapter.Status -eq 'Up' } | Select-Object -First 1;
+if ($cfg -ne $null -and $cfg.IPv4Address -ne $null) {
+  $ipObj = $cfg.IPv4Address; if ($ipObj -is [array]) { $ipObj = $ipObj[0] }
+  [pscustomobject]@{ ip = $ipObj.IPAddress; mac = $cfg.NetAdapter.MacAddress } | ConvertTo-Json -Compress
+}`;
+    const out = await execPS(ps);
+    if (out) {
+      const info = JSON.parse(out);
+      if (info && info.ip) {
+        // Normalize MAC to colon-separated lower form to match os.networkInterfaces().
+        const mac = info.mac ? String(info.mac).replace(/-/g, ':').toLowerCase() : null;
+        return { ip: info.ip, mac };
+      }
+    }
+  } catch (e) {
+    logger.warn('resolvePrimaryNetwork (PowerShell) failed, will fall back to os.networkInterfaces()', { error: e.message });
+  }
+  return null;
+}
+
 // ─── Printer Scanner ──────────────────────────────────────────────────────────
 
 class PrinterScanner {
@@ -1077,8 +1115,133 @@ class WebSocketClient extends EventEmitter {
       this.socket.on('print:execute', async (data) => {
         await this.handlePrintJob(data);
       });
+
+      // Server requests we EXPORT a printer's driver and upload it as backup.
+      // No install happens on other nodes — we just package what's on THIS
+      // machine and push it to the server catalog.
+      this.socket.on('driver:harvest', async (data) => {
+        await this.handleDriverHarvest(data);
+      });
     } catch (err) {
       logger.error('WebSocket connect failed', { error: err.message });
+    }
+  }
+
+  /**
+   * Export a locally-installed printer driver and upload it to the server.
+   * Strategy (all PowerShell, no extra npm deps):
+   *   1. Get-Printer → resolve DriverName for the given printer
+   *   2. Get-PrinterDriver → resolve InfPath (the oemXX.inf)
+   *   3. pnputil /export-driver <inf> <tmpDir>  → copies INF + all payload files
+   *   4. Compress-Archive <tmpDir> → driver.zip
+   *   5. read zip as base64 → POST /api/drivers/upload (with harvest metadata)
+   * Progress + final result are emitted back over the socket.
+   */
+  async handleDriverHarvest(data) {
+    const { requestId, printerName, printerId } = data || {};
+    if (!requestId || !printerName) {
+      logger.warn('driver:harvest missing requestId/printerName', { data });
+      return;
+    }
+    logger.info('Driver harvest requested', { requestId, printerName });
+
+    const emit = (event, payload) =>
+      this.socket?.emit(event, { requestId, clientId: this.clientId, printerName, ...payload });
+
+    const tmpRoot = path.join(process.env.TEMP || process.env.TMP || 'C:\\Windows\\Temp', `drv-harvest-${Date.now()}`);
+    const exportDir = path.join(tmpRoot, 'export');
+    const zipPath = path.join(tmpRoot, 'driver.zip');
+
+    try {
+      emit('driver:harvest:progress', { stage: 'resolving', message: 'Mencari driver printer...' });
+
+      // 1+2: resolve the Windows driver name then its INF path. Single PS call.
+      const psResolve = `
+$ErrorActionPreference='Stop';
+$p = Get-Printer -Name '${printerName.replace(/'/g, "''")}' -ErrorAction Stop;
+$d = Get-PrinterDriver -Name $p.DriverName -ErrorAction Stop;
+[pscustomobject]@{ DriverName=$d.Name; Manufacturer=$d.Manufacturer; InfPath=$d.InfPath } | ConvertTo-Json -Compress`;
+      const resolveOut = await execPS(psResolve);
+      const info = JSON.parse(resolveOut);
+      const driverName = info.DriverName;
+      const infPath = info.InfPath;
+      const manufacturer = info.Manufacturer || null;
+
+      if (!infPath) {
+        throw new Error(`Driver "${driverName}" tidak punya InfPath (kemungkinan driver in-box). Tidak bisa di-export.`);
+      }
+      logger.info('Resolved driver', { driverName, infPath });
+      emit('driver:harvest:progress', { stage: 'exporting', message: `Export driver "${driverName}"...`, driverName });
+
+      // 3: export the driver package (INF + all referenced files) to exportDir.
+      fs.mkdirSync(exportDir, { recursive: true });
+      const infLeaf = path.basename(infPath); // pnputil wants the published oemXX.inf name
+      // Prefer the published name in the driverstore; fall back to full InfPath.
+      const psExport = `
+$ErrorActionPreference='Stop';
+$dest='${exportDir.replace(/'/g, "''")}';
+$leaf='${infLeaf.replace(/'/g, "''")}';
+$full='${infPath.replace(/'/g, "''")}';
+$target = if (Test-Path $full) { $full } else { $leaf };
+pnputil /export-driver $target $dest | Out-String`;
+      const exportOut = await execPS(psExport);
+      logger.info('pnputil export done', { out: (exportOut || '').slice(0, 300) });
+
+      // sanity: did anything land in exportDir?
+      const files = fs.existsSync(exportDir) ? fs.readdirSync(exportDir) : [];
+      if (files.length === 0) {
+        throw new Error('Export folder kosong — pnputil tidak menghasilkan file driver.');
+      }
+
+      emit('driver:harvest:progress', { stage: 'zipping', message: 'Mengompres driver...' });
+
+      // 4: zip the export folder.
+      const psZip = `
+$ErrorActionPreference='Stop';
+if (Test-Path '${zipPath.replace(/'/g, "''")}') { Remove-Item '${zipPath.replace(/'/g, "''")}' -Force }
+Compress-Archive -Path '${exportDir.replace(/'/g, "''")}\\*' -DestinationPath '${zipPath.replace(/'/g, "''")}' -Force`;
+      await execPS(psZip);
+
+      const zipBuf = fs.readFileSync(zipPath);
+      const sizeMB = +(zipBuf.length / 1048576).toFixed(2);
+      logger.info('Driver zipped', { sizeMB });
+      emit('driver:harvest:progress', { stage: 'uploading', message: `Upload ke server (${sizeMB} MB)...` });
+
+      // 5: upload to server catalog as a backup driver entry.
+      const safeName = `${driverName} (from ${os.hostname()})`;
+      const baseUrl = this.url.replace(/\/$/, '');
+      const resp = await axios.post(`${baseUrl}/api/drivers/upload`, {
+        name: safeName,
+        manufacturer,
+        description: `Harvested otomatis dari node ${os.hostname()} (printer: ${printerName})`,
+        install_instructions: `Driver di-export via pnputil. Unzip lalu: pnputil /add-driver <inf> /install`,
+        filename: `${driverName.replace(/[^a-zA-Z0-9._-]/g, '_')}.zip`,
+        fileData: zipBuf.toString('base64'),
+        source_client_id: this.clientId || null,
+        windows_driver_name: driverName,
+        original_printer_name: printerName,
+      }, { timeout: 60000, maxBodyLength: Infinity, maxContentLength: Infinity });
+
+      logger.info('Driver uploaded to server', { driverId: resp.data?.id, name: safeName });
+      emit('driver:harvest:result', {
+        success: true,
+        driverId: resp.data?.id,
+        driverName,
+        savedAs: safeName,
+        sizeMB,
+        printerId: printerId ?? null,
+      });
+    } catch (err) {
+      // 409 = already exists; surface as a friendly message, not a hard failure.
+      const isDup = err?.response?.status === 409;
+      const msg = isDup
+        ? `Driver untuk "${printerName}" sudah ada di server.`
+        : (err?.response?.data?.error || err.message);
+      logger.error('Driver harvest failed', { requestId, error: msg });
+      emit('driver:harvest:result', { success: false, error: msg, duplicate: isDup, printerId: printerId ?? null });
+    } finally {
+      // cleanup tmp
+      try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch (_) {}
     }
   }
 
@@ -1262,6 +1425,11 @@ class PrintServerAgent {
 
   async registerWithServer() {
     try {
+      // PRIMARY: ambil IP & MAC dari adapter aktif yang punya default gateway —
+      // sama dengan yang tampil di `ipconfig` / Control Panel paling atas.
+      // FALLBACK (di bawah): os.networkInterfaces() bila PowerShell tak tersedia.
+      const primary = await resolvePrimaryNetwork();
+
       // Pick the best LAN IP — prefer private IPv4, then any IPv4, then IPv6.
       // Skip link-local fe80::, virtual adapters, and internal NICs.
       const allIfaces = Object.values(os.networkInterfaces()).flat().filter(i => i && !i.internal);
@@ -1274,6 +1442,21 @@ class PrintServerAgent {
       const linkIPv6    = allIfaces.find(i => i.family === 'IPv6' && isLinkLocalIPv6(i.address));
 
       const bestIface = privateIPv4 || anyIPv4 || globalIPv6 || linkIPv6 || null;
+
+      // Resolusi akhir: utamakan adapter primary (gateway), baru fallback iface.
+      const resolvedIp  = (primary && primary.ip)  || (bestIface ? bestIface.address : null);
+      // MAC: kalau primary punya IP tapi MAC kosong, coba cocokkan ke iface yg IP-nya sama.
+      let resolvedMac = (primary && primary.mac) || null;
+      if (!resolvedMac && primary && primary.ip) {
+        const match = allIfaces.find(i => i.family === 'IPv4' && i.address === primary.ip);
+        resolvedMac = match ? match.mac : null;
+      }
+      if (!resolvedMac) resolvedMac = bestIface ? bestIface.mac : null;
+      if (primary && primary.ip) {
+        logger.info('Primary network resolved from default-gateway adapter', { ip: primary.ip, mac: resolvedMac });
+      } else {
+        logger.info('Primary network fallback to os.networkInterfaces()', { ip: resolvedIp });
+      }
 
       // Map Windows release number → friendly product name.
       let osVersionLabel = `${os.platform()} ${os.release()}`;
@@ -1290,8 +1473,8 @@ class PrintServerAgent {
 
       const nodeInfo = {
         hostname: os.hostname(),
-        ip_address: bestIface ? bestIface.address : null,
-        mac_address: bestIface ? bestIface.mac : null,
+        ip_address: resolvedIp,
+        mac_address: resolvedMac,
         os_version: osVersionLabel,
         client_version: AGENT_VERSION
       };

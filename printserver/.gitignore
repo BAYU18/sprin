@@ -27,6 +27,11 @@ out/
 # OS
 .DS_Store
 Thumbs.db
+nul
+
+# Build cache
+*.tsbuildinfo
+tsconfig.tsbuildinfo
 
 # Logs
 *.log

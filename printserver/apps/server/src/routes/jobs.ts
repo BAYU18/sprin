@@ -64,6 +64,7 @@ export async function setupJobsRoutes(fastify: FastifyInstance) {
     fastify.get('/:jobId', async (request, reply) => {
         const { jobId } = request.params as { jobId: string };
 
+        // ── Core job + join lookup (kept compatible with old payload) ──────
         const job = await fastify.knex('print_jobs')
             .leftJoin('users', 'print_jobs.user_id', 'users.id')
             .leftJoin('clients', 'print_jobs.client_id', 'clients.id')
@@ -72,8 +73,13 @@ export async function setupJobsRoutes(fastify: FastifyInstance) {
                 'print_jobs.*',
                 'users.username',
                 'users.full_name',
+                'users.department',
                 'clients.hostname as client_hostname',
-                'printers.name as printer_name'
+                'printers.name as printer_name',
+                'printers.slug as printer_slug',
+                'printers.status as printer_status',
+                'printers.type as printer_type',
+                'printers.driver_id as printer_driver_id'
             )
             .where({ 'print_jobs.job_id': jobId })
             .first();
@@ -85,11 +91,173 @@ export async function setupJobsRoutes(fastify: FastifyInstance) {
         const queue = await fastify.knex('queues')
             .where({ print_job_id: job.id });
 
-        const retries = await fastify.knex('retries')
-            .where({ print_job_id: job.id })
-            .orderBy('created_at', 'desc');
+        // ── Attempts history with the printer snapshot used for each retry ──
+        // Newest first (dashboard reads top-down), but we expose
+        // attempts_history ASC by attempt_number for clean timeline rendering.
+        const attemptsRaw = await fastify.knex('retries')
+            .leftJoin('printers as rp', 'retries.printer_id', 'rp.id')
+            .where({ 'retries.print_job_id': job.id })
+            .select(
+                'retries.id',
+                'retries.print_job_id',
+                'retries.printer_id',
+                'retries.reason',
+                'retries.status',
+                'retries.attempt_number',
+                'retries.error_message',
+                'retries.started_at',
+                'retries.completed_at',
+                'retries.created_at',
+                'retries.updated_at',
+                'rp.name as printer_name',
+                'rp.slug as printer_slug',
+                'rp.status as printer_status',
+                'rp.type as printer_type'
+            )
+            .orderBy('retries.attempt_number', 'asc');
 
-        return { ...job, queue, retries };
+        const attemptsHistory = attemptsRaw.map((a: any) => {
+            let durationMs: number | null = null;
+            if (a.started_at && a.completed_at) {
+                durationMs = new Date(a.completed_at).getTime() - new Date(a.started_at).getTime();
+            }
+            return {
+                id: a.id,
+                attempt_number: a.attempt_number,
+                status: a.status,
+                reason: a.reason,
+                error_message: a.error_message,
+                started_at: a.started_at,
+                completed_at: a.completed_at,
+                created_at: a.created_at,
+                updated_at: a.updated_at,
+                duration_ms: durationMs,
+                printer: a.printer_id ? {
+                    id: a.printer_id,
+                    name: a.printer_name,
+                    slug: a.printer_slug,
+                    status: a.printer_status,
+                    type: a.printer_type,
+                } : null,
+            };
+        });
+
+        // `retries` field — legacy array of raw rows, newest first, for
+        // any consumer still depending on the old shape.
+        const retries = [...attemptsRaw].sort((a: any, b: any) => {
+            const ta = a.created_at ? new Date(a.created_at).getTime() : 0;
+            const tb = b.created_at ? new Date(b.created_at).getTime() : 0;
+            return tb - ta;
+        });
+
+        // ── Synthesise a chronological event timeline from existing fields ──
+        // We never had a dedicated job_events table; instead we derive one
+        // from the canonical timestamps already on the job + each retry row.
+        type Evt = { timestamp: string; type: string; message: string; meta?: Record<string, any> };
+        const events: Evt[] = [];
+
+        if (job.created_at) {
+            events.push({
+                timestamp: job.created_at,
+                type: 'queued',
+                message: `Job submitted to queue (${job.file_name || job.job_name || 'print job'})`,
+                meta: { file_name: job.file_name, copies: job.copies, pages: job.pages },
+            });
+        }
+
+        for (const a of attemptsHistory) {
+            const ts = a.started_at || a.created_at;
+            if (!ts) continue;
+            const printerLabel = a.printer?.name || (a.printer_id ? `Printer #${a.printer_id}` : 'unknown printer');
+            events.push({
+                timestamp: ts,
+                type: 'retry_attempt',
+                message: `Retry attempt #${a.attempt_number ?? '?'} on ${printerLabel}`,
+                meta: {
+                    retry_id: a.id,
+                    attempt_number: a.attempt_number,
+                    reason: a.reason,
+                    error_message: a.error_message,
+                    printer_id: a.printer_id,
+                    printer_name: a.printer?.name,
+                },
+            });
+            if (a.completed_at && a.started_at) {
+                events.push({
+                    timestamp: a.completed_at,
+                    type: a.status === 'failed' ? 'attempt_failed' : 'attempt_succeeded',
+                    message: a.status === 'failed'
+                        ? `Attempt #${a.attempt_number} failed: ${a.error_message || a.reason || 'unknown error'}`
+                        : `Attempt #${a.attempt_number} completed on ${printerLabel}`,
+                    meta: { retry_id: a.id, attempt_number: a.attempt_number, status: a.status },
+                });
+            }
+        }
+
+        if (job.started_at) {
+            events.push({
+                timestamp: job.started_at,
+                type: 'processing',
+                message: `Print job started on ${job.printer_name || 'printer'}`,
+                meta: { printer_id: job.printer_id, printer_name: job.printer_name },
+            });
+        }
+        if (job.completed_at && (job.status === 'completed' || job.status === 'cancelled' || job.status === 'failed')) {
+            events.push({
+                timestamp: job.completed_at,
+                type: job.status,
+                message: job.status === 'completed'
+                    ? `Job completed on ${job.printer_name || 'printer'}`
+                    : job.status === 'cancelled'
+                        ? 'Job was cancelled by user'
+                        : `Job failed: ${job.error_message || 'unknown error'}`,
+                meta: { status: job.status, error_message: job.error_message },
+            });
+        }
+        if (job.updated_at && job.status === 'failed' && !job.completed_at) {
+            events.push({
+                timestamp: job.updated_at,
+                type: 'failed',
+                message: `Job failed: ${job.error_message || 'unknown error'}`,
+                meta: { status: job.status, error_message: job.error_message },
+            });
+        }
+
+        // Sort the entire timeline chronologically. Nulls land at the end.
+        events.sort((a, b) => {
+            const ta = a.timestamp ? new Date(a.timestamp).getTime() : Number.POSITIVE_INFINITY;
+            const tb = b.timestamp ? new Date(b.timestamp).getTime() : Number.POSITIVE_INFINITY;
+            return ta - tb;
+        });
+
+        // ── Printer + user nested detail objects (richer than flat fields) ──
+        const printerDetails = job.printer_id ? {
+            id: job.printer_id,
+            name: job.printer_name,
+            slug: job.printer_slug,
+            status: job.printer_status,
+            type: job.printer_type,
+            driver_id: job.printer_driver_id,
+        } : null;
+
+        const userDetails = job.user_id ? {
+            id: job.user_id,
+            username: job.username,
+            full_name: job.full_name,
+            department: job.department,
+        } : null;
+
+        // ── Final payload: keep every existing field for back-compat ──
+        return {
+            ...job,
+            queue,
+            retries,
+            // New richer fields
+            events,
+            attempts_history: attemptsHistory,
+            printer_details: printerDetails,
+            user_details: userDetails,
+        };
     });
 
     fastify.post('/submit', async (request, reply) => {

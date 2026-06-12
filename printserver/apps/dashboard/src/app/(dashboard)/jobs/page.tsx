@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
+import Link from 'next/link';
 import { jobs as jobsApi } from '@/lib/api';
 import { on, off } from '@/hooks/useSocket';
 import {
@@ -440,19 +441,36 @@ export default function JobsPage() {
                       onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--bg-hover)')}
                       onMouseLeave={(e) => (e.currentTarget.style.background = isEven ? 'transparent' : 'rgba(0,212,255,0.018)')}
                     >
-                      {/* Job ID */}
+                      {/* Job ID — clickable link to /jobs/:jobId (TIER-1 #1) */}
                       <td style={{ padding: '13px 16px', whiteSpace: 'nowrap' }}>
-                        <span style={{
-                          fontFamily: "'Share Tech Mono', monospace",
-                          fontSize: '12px',
-                          color: 'var(--accent-cyan)',
-                          background: 'rgba(0,212,255,0.08)',
-                          border: '1px solid rgba(0,212,255,0.2)',
-                          borderRadius: '4px',
-                          padding: '2px 7px',
-                        }}>
+                        <Link
+                          href={job.job_id ? `/jobs/${job.job_id}` : '#'}
+                          title={job.job_id || ''}
+                          style={{
+                            fontFamily: "'Share Tech Mono', monospace",
+                            fontSize: '12px',
+                            color: 'var(--accent-cyan)',
+                            background: 'rgba(0,212,255,0.08)',
+                            border: '1px solid rgba(0,212,255,0.2)',
+                            borderRadius: '4px',
+                            padding: '2px 7px',
+                            textDecoration: 'none',
+                            display: 'inline-block',
+                            transition: 'all 0.15s ease',
+                          }}
+                          onMouseEnter={(e) => {
+                            (e.currentTarget as HTMLAnchorElement).style.background = 'rgba(0,212,255,0.18)';
+                            (e.currentTarget as HTMLAnchorElement).style.borderColor = 'rgba(0,212,255,0.5)';
+                            (e.currentTarget as HTMLAnchorElement).style.boxShadow = '0 0 6px rgba(0,212,255,0.3)';
+                          }}
+                          onMouseLeave={(e) => {
+                            (e.currentTarget as HTMLAnchorElement).style.background = 'rgba(0,212,255,0.08)';
+                            (e.currentTarget as HTMLAnchorElement).style.borderColor = 'rgba(0,212,255,0.2)';
+                            (e.currentTarget as HTMLAnchorElement).style.boxShadow = 'none';
+                          }}
+                        >
                           {job.job_id?.slice(0, 8) ?? '—'}
-                        </span>
+                        </Link>
                       </td>
 
                       {/* File name */}

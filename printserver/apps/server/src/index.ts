@@ -137,6 +137,15 @@ async function buildServer() {
 
     await setupRoutes(fastify);
 
+    // TIER-2 #6: start health monitor service
+    try {
+        const { startHealthMonitor } = await import('./services/health-monitor.js');
+        startHealthMonitor(fastify);
+        logger.info('[Server] Health monitor started');
+    } catch (e) {
+        logger.warn(`[Server] Health monitor not started: ${(e as Error).message}`);
+    }
+
     fastify.get('/health', async () => ({ status: 'ok', timestamp: new Date().toISOString() }));
     fastify.get('/ready', async (request, reply) => {
         const db = fastify.knex;

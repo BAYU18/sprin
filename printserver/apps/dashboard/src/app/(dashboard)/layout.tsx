@@ -1,6 +1,7 @@
 'use client';
 
 import Sidebar from '@/components/Sidebar';
+import MobileNav from '@/components/MobileNav';
 import DashboardHeader from '@/components/DashboardHeader';
 import { useState, useEffect } from 'react';
 
@@ -48,6 +49,7 @@ export default function DashboardLayout({
           {children}
         </div>
       </main>
+      <MobileNav />
     </div>
   );
 }

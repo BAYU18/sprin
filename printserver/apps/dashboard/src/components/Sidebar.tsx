@@ -115,6 +115,15 @@ export default function Sidebar({ isOpen = false, onClose }: SidebarProps) {
         : undefined,
     },
     {
+      href: '/clients',
+      icon: 'nodes',
+      label: 'Nodes',
+      badge: counts.clients_online > 0
+        ? { value: counts.clients_online, tone: 'ok' }
+        : undefined,
+    },
+    { href: '/health', icon: 'activity', label: 'Health' },
+    {
       href: '/jobs',
       icon: 'file',
       label: 'Job Queue',
@@ -122,6 +131,7 @@ export default function Sidebar({ isOpen = false, onClose }: SidebarProps) {
         ? { value: counts.jobs_pending, tone: 'warn' }
         : undefined,
     },
+    { href: '/queues', icon: 'layers', label: 'Active Queues' },
     { href: '/jobs/dead-letter', icon: 'alert-triangle', label: 'Dead Letter' },
     { href: '/analytics', icon: 'chart', label: 'Analytics' },
     { href: '/drivers', icon: 'driver', label: 'Drivers' },
@@ -204,6 +214,28 @@ export default function Sidebar({ isOpen = false, onClose }: SidebarProps) {
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
             <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+          </svg>
+        );
+      case 'nodes':
+        return (
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <rect x="2" y="3" width="20" height="14" rx="2"/>
+            <line x1="8" y1="21" x2="16" y2="21"/>
+            <line x1="12" y1="17" x2="12" y2="21"/>
+          </svg>
+        );
+      case 'activity':
+        return (
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+          </svg>
+        );
+      case 'layers':
+        return (
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <polygon points="12 2 2 7 12 12 22 7 12 2"/>
+            <polyline points="2 17 12 22 22 17"/>
+            <polyline points="2 12 12 17 22 12"/>
           </svg>
         );
       case 'link':

@@ -17,6 +17,8 @@ import { setupDriversRoutes } from './drivers.js';
 import { setupPaperRoutes } from './paper.js';
 import { setupBadgesRoutes } from './badges.js';
 import { setupPrinterGroupsRoutes } from './printer-groups.js';
+import { setupHealthRoutes } from './health.js';
+import { setupQueueMgmtRoutes } from './queue-mgmt.js';
 import { logger } from '../utils/logger.js';
 import { cache } from '../utils/cache.js';
 
@@ -73,6 +75,8 @@ export async function setupRoutes(fastify: FastifyInstance) {
         await instance.register(setupAlertsRoutes,       { prefix: '/alerts' });
         await instance.register(setupAnalyticsRoutes,    { prefix: '/analytics' });
         await instance.register(setupSettingsRoutes,      { prefix: '/settings' });
+        await instance.register(setupHealthRoutes,         { prefix: '/health' });
+        await instance.register(setupQueueMgmtRoutes);
 
         // POST /api/admin/cleanup-stuck-jobs — manual stuck-job cleanup trigger
         instance.post('/admin/cleanup-stuck-jobs', async (request, reply) => {

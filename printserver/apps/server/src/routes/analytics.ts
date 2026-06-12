@@ -166,4 +166,94 @@ export async function setupAnalyticsRoutes(fastify: FastifyInstance) {
             }
         });
     });
+
+    // ── TIER-3 #9: Usage report export (CSV) ───────────────────────
+    fastify.get<{
+        Querystring: { from?: string; to?: string; format?: string; scope?: string };
+    }>('/export', async (request, reply) => {
+        const { from, to, format = 'csv', scope = 'all' } = request.query;
+        const fromDate = from ? new Date(from) : new Date(Date.now() - 30 * 24 * 3600 * 1000);
+        const toDate = to ? new Date(to) : new Date();
+
+        let query = fastify.knex('print_jobs')
+            .leftJoin('printers', 'print_jobs.printer_id', 'printers.id')
+            .leftJoin('users', 'print_jobs.user_id', 'users.id')
+            .leftJoin('clients', 'print_jobs.client_id', 'clients.id')
+            .where('print_jobs.created_at', '>=', fromDate)
+            .where('print_jobs.created_at', '<=', toDate)
+            .select(
+                'print_jobs.job_id',
+                'print_jobs.status',
+                'print_jobs.pages',
+                'print_jobs.copies',
+                fastify.knex.raw('(print_jobs.pages * print_jobs.copies) as total_pages'),
+                'print_jobs.paper_size',
+                'print_jobs.color_mode',
+                'print_jobs.duplex',
+                'print_jobs.file_name',
+                'print_jobs.error_message',
+                'print_jobs.created_at',
+                'print_jobs.started_at',
+                'print_jobs.completed_at',
+                'printers.name as printer_name',
+                'printers.type as printer_type',
+                'users.username',
+                'users.full_name',
+                'users.department',
+                'clients.hostname as client_hostname'
+            )
+            .orderBy('print_jobs.created_at', 'desc')
+            .limit(50000);  // safety cap
+
+        if (scope !== 'all') {
+            if (scope === 'failed') query = query.where('print_jobs.status', 'failed');
+            else if (scope === 'completed') query = query.where('print_jobs.status', 'completed');
+            else if (scope === 'cancelled') query = query.where('print_jobs.status', 'cancelled');
+        }
+
+        const rows = await query;
+
+        if (format === 'json') {
+            return {
+                meta: {
+                    from: fromDate.toISOString(),
+                    to: toDate.toISOString(),
+                    scope,
+                    count: rows.length,
+                    generated_at: new Date().toISOString(),
+                },
+                data: rows,
+            };
+        }
+
+        // CSV format
+        const headers = [
+            'job_id', 'status', 'pages', 'copies', 'total_pages',
+            'paper_size', 'color_mode', 'duplex', 'file_name',
+            'printer_name', 'printer_type', 'username', 'full_name', 'department',
+            'client_hostname', 'error_message',
+            'created_at', 'started_at', 'completed_at',
+        ];
+
+        const escapeCsv = (v: any) => {
+            if (v === null || v === undefined) return '';
+            const s = String(v);
+            if (s.includes(',') || s.includes('"') || s.includes('\n') || s.includes('\r')) {
+                return '"' + s.replace(/"/g, '""') + '"';
+            }
+            return s;
+        };
+
+        const csvLines = [headers.join(',')];
+        for (const r of rows) {
+            csvLines.push(headers.map(h => escapeCsv((r as any)[h])).join(','));
+        }
+
+        const csv = csvLines.join('\n');
+        const filename = `printserver-usage-${scope}-${fromDate.toISOString().slice(0, 10)}-${toDate.toISOString().slice(0, 10)}.csv`;
+
+        reply.header('Content-Type', 'text/csv; charset=utf-8');
+        reply.header('Content-Disposition', `attachment; filename="${filename}"`);
+        return csv;
+    });
 }

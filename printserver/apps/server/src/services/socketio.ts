@@ -66,6 +66,16 @@ export function setupSocketIO(fastify: any) {
             cache.invalidate(cacheKeys.clientsList()).catch(() => {});
         });
 
+        // ── Driver harvest progress/result relay (agent → dashboard) ─────────
+        // Agent memancarkan progress & hasil akhir export driver. Server hanya
+        // meneruskan ke semua dashboard yang terhubung agar UI bisa update.
+        socket.on('driver:harvest:progress', (data) => {
+            socket.broadcast.emit('driver:harvest:progress', data);
+        });
+        socket.on('driver:harvest:result', (data) => {
+            socket.broadcast.emit('driver:harvest:result', data);
+        });
+
         socket.on('disconnect', (reason) => {
             logger.info(`[Socket.IO] Client disconnected: ${socket.id}, reason: ${reason}`);
         });

@@ -2,11 +2,11 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { clients as clientsApi } from '@/lib/api';
+import { clients as clientsApi, drivers as driversApi } from '@/lib/api';
 import { on, off, getSocket } from '@/hooks/useSocket';
 import {
   ArrowLeft, Wifi, WifiOff, Cpu, Server, Printer, FileText, Clock,
-  CheckCircle2, XCircle, Loader2, RefreshCw, Network, HardDrive, Hash, Activity
+  CheckCircle2, XCircle, Loader2, RefreshCw, Network, HardDrive, Hash, Activity, DownloadCloud
 } from 'lucide-react';
 import { format } from 'date-fns';
 
@@ -19,6 +19,9 @@ export default function ClientDetailPage() {
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [now, setNow] = useState(Date.now());
+  // Driver harvest: lacak status per-printer (by printer name) + pesan toast.
+  const [harvest, setHarvest] = useState<Record<string, { stage: string; message: string; done?: boolean; ok?: boolean }>>({});
+  const [toast, setToast] = useState<{ ok: boolean; text: string } | null>(null);
 
   const fetchDetail = useCallback(async () => {
     try {
@@ -65,6 +68,24 @@ export default function ClientDetailPage() {
     const handlePrinterCreated = () => fetchDetail();
     on('printer:created', handlePrinterCreated);
 
+    // Driver harvest progress/result — filter ke node ini saja.
+    const onHarvestProgress = (d: any) => {
+      if (d?.clientId !== id || !d?.printerName) return;
+      setHarvest(prev => ({ ...prev, [d.printerName]: { stage: d.stage || 'working', message: d.message || 'Memproses...' } }));
+    };
+    const onHarvestResult = (d: any) => {
+      if (d?.clientId !== id || !d?.printerName) return;
+      setHarvest(prev => ({ ...prev, [d.printerName]: { stage: 'done', message: d.success ? 'Driver tersimpan' : (d.error || 'Gagal'), done: true, ok: !!d.success } }));
+      setToast({ ok: !!d.success, text: d.success
+        ? `Driver "${d.driverName}" dari ${d.printerName} tersimpan di server (${d.sizeMB ?? '?'} MB)`
+        : `Harvest gagal: ${d.error || 'unknown'}` });
+      setTimeout(() => setToast(null), 6000);
+      // bersihkan badge setelah beberapa detik
+      setTimeout(() => setHarvest(prev => { const c = { ...prev }; delete c[d.printerName]; return c; }), 8000);
+    };
+    on('driver:harvest:progress', onHarvestProgress);
+    on('driver:harvest:result', onHarvestResult);
+
     // WS-fallback polling (15s) — only when socket is disconnected.
     const wsFallback = (getSocket() as any);
     let refresh: any = null;
@@ -80,6 +101,8 @@ export default function ClientDetailPage() {
       off('client:heartbeat', hb); off('client:online', hb); off('client:offline', hb);
       off('printer:patch', handlePrinterPatch);
       off('printer:created', handlePrinterCreated);
+      off('driver:harvest:progress', onHarvestProgress);
+      off('driver:harvest:result', onHarvestResult);
       wsFallback?.off?.('disconnect', onDisconnect);
       wsFallback?.off?.('connect', onConnect);
     };
@@ -170,6 +193,19 @@ export default function ClientDetailPage() {
     { k: 'Registered', v: data.created_at ? format(new Date(data.created_at), 'dd MMM yyyy HH:mm') : 'N/A', icon: <Clock size={14} />, color: C.muted },
   ];
 
+  const triggerHarvest = async (printerName: string, printerId?: number) => {
+    if (!online) { setToast({ ok: false, text: 'Node offline — tidak bisa harvest driver' }); setTimeout(() => setToast(null), 5000); return; }
+    setHarvest(prev => ({ ...prev, [printerName]: { stage: 'sending', message: 'Mengirim perintah...' } }));
+    try {
+      await driversApi.harvest(id, printerName, printerId);
+    } catch (e: any) {
+      const msg = e?.response?.data?.error || e.message || 'Gagal mengirim perintah';
+      setHarvest(prev => ({ ...prev, [printerName]: { stage: 'done', message: msg, done: true, ok: false } }));
+      setToast({ ok: false, text: msg });
+      setTimeout(() => setToast(null), 6000);
+    }
+  };
+
   const statusColor = (s = '') => {
     const x = s.toLowerCase();
     if (x === 'completed') return C.green;
@@ -254,13 +290,33 @@ export default function ClientDetailPage() {
                 const port = typeof p === 'object' ? (p?.port || '') : '';
                 const pstatus = typeof p === 'object' ? (p?.status || (online ? 'online' : 'offline')) : (online ? 'online' : 'offline');
                 const ok = pstatus === 'online';
+                const pid = typeof p === 'object' ? p?.id : undefined;
+                const hv = harvest[name];
+                const busy = !!hv && !hv.done;
                 return (
                   <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 12px', background: C.sec, borderRadius: 8, border: `1px solid ${C.border}` }}>
                     <span style={{ width: 8, height: 8, borderRadius: '50%', background: ok ? C.green : C.muted, boxShadow: ok ? `0 0 8px ${C.green}` : 'none', flexShrink: 0 }} />
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontFamily: C.mono, fontSize: 13, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</div>
-                      {port && <div style={{ fontFamily: C.mono, fontSize: 10, color: C.muted, marginTop: 2 }}>{port}</div>}
+                      {hv
+                        ? <div style={{ fontFamily: C.mono, fontSize: 10, color: hv.done ? (hv.ok ? C.green : C.red) : C.cyan, marginTop: 2 }}>{hv.message}</div>
+                        : (port && <div style={{ fontFamily: C.mono, fontSize: 10, color: C.muted, marginTop: 2 }}>{port}</div>)}
                     </div>
+                    <button
+                      onClick={() => triggerHarvest(name, pid)}
+                      disabled={busy || !online}
+                      title={online ? 'Export driver printer ini & simpan ke server sebagai cadangan' : 'Node offline'}
+                      style={{
+                        display: 'inline-flex', alignItems: 'center', gap: 6, padding: '5px 10px',
+                        background: 'rgba(0,212,255,0.08)', border: `1px solid rgba(0,212,255,0.3)`,
+                        borderRadius: 6, color: C.cyan, cursor: (busy || !online) ? 'not-allowed' : 'pointer',
+                        fontFamily: C.sans, fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5,
+                        opacity: (busy || !online) ? 0.5 : 1, flexShrink: 0,
+                      }}
+                    >
+                      {busy ? <Loader2 size={13} style={{ animation: 'spin 1s linear infinite' }} /> : <DownloadCloud size={13} />}
+                      {busy ? 'Harvesting' : 'Harvest'}
+                    </button>
                     <span style={{ fontFamily: C.mono, fontSize: 10, color: ok ? C.green : C.muted }}>{ok ? 'ONLINE' : 'OFFLINE'}</span>
                   </div>
                 );
@@ -300,6 +356,19 @@ export default function ClientDetailPage() {
           </div>
         )}
       </div>
+
+      {/* Toast notifikasi harvest */}
+      {toast && (
+        <div style={{
+          position: 'fixed', bottom: 24, right: 24, zIndex: 1000,
+          display: 'flex', alignItems: 'center', gap: 10, padding: '12px 16px',
+          background: C.card, border: `1px solid ${toast.ok ? 'rgba(0,255,136,0.4)' : 'rgba(255,61,90,0.4)'}`,
+          borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,0.4)', maxWidth: 380,
+        }}>
+          {toast.ok ? <CheckCircle2 size={18} style={{ color: C.green, flexShrink: 0 }} /> : <XCircle size={18} style={{ color: C.red, flexShrink: 0 }} />}
+          <span style={{ fontFamily: C.sans, fontSize: 13, color: C.text }}>{toast.text}</span>
+        </div>
+      )}
     </div>
   );
 }

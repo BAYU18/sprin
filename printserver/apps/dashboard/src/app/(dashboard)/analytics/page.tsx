@@ -24,7 +24,9 @@ import {
   Award,
   AlertTriangle,
   TrendingUp,
-  ShieldAlert
+  ShieldAlert,
+  Download,
+  Calendar
 } from 'lucide-react';
 import { format } from 'date-fns';
 
@@ -37,6 +39,44 @@ export default function AnalyticsPage() {
   const [departments, setDepartments] = useState<any[]>([]);
   const [paperUsage, setPaperUsage] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  // TIER-3 #9: export state
+  const [exportFrom, setExportFrom] = useState<string>(() => {
+    const d = new Date(Date.now() - 30 * 24 * 3600 * 1000);
+    return d.toISOString().slice(0, 10);
+  });
+  const [exportTo, setExportTo] = useState<string>(() => new Date().toISOString().slice(0, 10));
+  const [exportScope, setExportScope] = useState<'all' | 'completed' | 'failed' | 'cancelled'>('all');
+  const [exporting, setExporting] = useState(false);
+
+  const handleExport = async () => {
+    setExporting(true);
+    try {
+      const params = new URLSearchParams({
+        from: new Date(exportFrom).toISOString(),
+        to: new Date(exportTo).toISOString() + 'T23:59:59',
+        scope: exportScope,
+        format: 'csv',
+      });
+      const token = localStorage.getItem('ps_token') || '';
+      const res = await fetch(`/api/analytics/export?${params.toString()}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error(`Export failed: ${res.status}`);
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `printserver-${exportScope}-${exportFrom}-to-${exportTo}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (e: any) {
+      alert(`Export failed: ${e.message}`);
+    } finally {
+      setExporting(false);
+    }
+  };
 
   const fetchData = async () => {
     try {
@@ -105,6 +145,50 @@ export default function AnalyticsPage() {
           <RefreshCw style={{ width: '16px', height: '16px' }} />
           Refresh
         </button>
+      </div>
+      {/* TIER-3 #9: Export bar */}
+      <div className="card" style={{ padding: 14, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10 }}>
+        <Download size={16} style={{ color: 'var(--accent-cyan)' }} />
+        <span style={{ fontFamily: 'Rajdhani', fontSize: 12, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 1, fontWeight: 600 }}>
+          Export CSV
+        </span>
+        <Calendar size={14} style={{ color: 'var(--text-muted)', marginLeft: 12 }} />
+        <input
+          type="date"
+          value={exportFrom}
+          onChange={(e) => setExportFrom(e.target.value)}
+          className="input"
+          style={{ padding: '4px 8px', fontSize: 12, background: 'var(--bg-secondary)', border: '1px solid var(--border)', color: 'var(--text-primary)', borderRadius: 6 }}
+        />
+        <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>→</span>
+        <input
+          type="date"
+          value={exportTo}
+          onChange={(e) => setExportTo(e.target.value)}
+          className="input"
+          style={{ padding: '4px 8px', fontSize: 12, background: 'var(--bg-secondary)', border: '1px solid var(--border)', color: 'var(--text-primary)', borderRadius: 6 }}
+        />
+        <select
+          value={exportScope}
+          onChange={(e) => setExportScope(e.target.value as any)}
+          className="input"
+          style={{ padding: '4px 8px', fontSize: 12, background: 'var(--bg-secondary)', border: '1px solid var(--border)', color: 'var(--text-primary)', borderRadius: 6 }}
+        >
+          <option value="all">All jobs</option>
+          <option value="completed">Completed only</option>
+          <option value="failed">Failed only</option>
+          <option value="cancelled">Cancelled only</option>
+        </select>
+        <button
+          onClick={handleExport}
+          disabled={exporting}
+          className="btn-primary"
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: exporting ? 'wait' : 'pointer', fontSize: 12, padding: '6px 12px' }}
+        >
+          {exporting ? <RefreshCw size={13} style={{ animation: 'spin 1s linear infinite' }} /> : <Download size={13} />}
+          {exporting ? 'Exporting...' : 'Download'}
+        </button>
+        <style jsx>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
       </div>
       {/* Mobile title (more compact) */}
       <div className="mobile-only" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>

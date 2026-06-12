@@ -1,7 +1,7 @@
 @echo off
 :: ============================================================
 :: PrintServer Pro - Node Agent Manager
-:: Kelola agent di komputer ini: status / start / stop / restart / log / uninstall
+:: Kelola agent di komputer ini: status / start / stop / restart / log / update / uninstall
 :: Jalankan sebagai Administrator (klik kanan - Run as administrator)
 :: ============================================================
 setlocal EnableDelayedExpansion
@@ -12,7 +12,7 @@ set TARGET_DIR=%APPDATA%\printserver-agent
 set EXE_PATH=%TARGET_DIR%\printserver-agent.exe
 set PROC_NAME=printserver-agent.exe
 set SERVER_URL=http://192.168.1.141:3000
-
+set VERSION_FILE=%TARGET_DIR%\version.txt
 :: --- Pastikan hak Administrator ---
 net session >nul 2>&1
 if not %errorLevel% == 0 (
@@ -22,6 +22,28 @@ if not %errorLevel% == 0 (
     echo.
     pause
     exit /b 1
+)
+
+:: --- Fetch versi server sekali saat startup ---
+set SERVER_VER=unknown
+set SERVER_SIZE=0
+for /f "usebackq delims=" %%R in (`powershell -NoProfile -Command "try { $r = Invoke-RestMethod -Uri '%SERVER_URL%/downloads/agent/info' -TimeoutSec 5; $r.version } catch { 'unavailable' }"`) do set SERVER_VER=%%R
+for /f "usebackq delims=" %%S in (`powershell -NoProfile -Command "try { $r = Invoke-RestMethod -Uri '%SERVER_URL%/downloads/agent/info' -TimeoutSec 5; [math]::Round($r.size/1MB,1).ToString() + ' MB' } catch { '?' }"`) do set SERVER_SIZE=%%S
+
+:: --- Baca versi lokal ---
+set LOCAL_VER=unknown
+if exist "%VERSION_FILE%" (
+    set /p LOCAL_VER=<"%VERSION_FILE%"
+)
+
+:: --- Bandingkan versi ---
+set NEED_UPDATE=0
+if /I not "%LOCAL_VER%"=="%SERVER_VER%" (
+    if not "%SERVER_VER%"=="unavailable" (
+        if not "%SERVER_VER%"=="unknown" (
+            set NEED_UPDATE=1
+        )
+    )
 )
 
 :MENU
@@ -52,7 +74,29 @@ if !errorLevel! == 0 (
 
 echo  Status Proses : !PROC_STATUS!
 echo  Task Terdaftar: !TASK_EXISTS!
+echo --------------------------------------------------------------
+
+:: --- Tampilkan versi ---
+echo  Versi Lokal  : !LOCAL_VER!
+echo  Versi Server : !SERVER_VER! ^(!SERVER_SIZE!^)
+
+if "!NEED_UPDATE!"=="1" (
+    echo  --------------------------------------------------------
+    echo   *** UPDATE TERSEDIA: !LOCAL_VER! - ^> !SERVER_VER! ***
+    echo   Pilih menu [9] untuk update, atau jalankan otomatis.
+    echo  --------------------------------------------------------
+
+    :: --- Tawarkan auto-update ---
+    set /p AUTO_UP="  Update sekarang? (Y/n): "
+    if /I not "!AUTO_UP!"=="n" (
+        call :DO_UPDATE
+        goto MENU
+    )
+) else (
+    echo  Status       : UP TO DATE
+)
 echo ==============================================================
+
 echo.
 echo   [1] Lihat Status Lengkap
 echo   [2] START  agent (nyalakan)
@@ -62,9 +106,12 @@ echo   [5] Lihat Log terakhir
 echo   [6] NONAKTIFKAN auto-start saat boot
 echo   [7] AKTIFKAN auto-start saat boot
 echo   [8] UNINSTALL agent (hapus total)
+if "!NEED_UPDATE!"=="1" (
+    echo   [9] UPDATE agent (download versi !SERVER_VER!)
+)
 echo   [0] Keluar
 echo.
-set /p CHOICE="Pilih menu [0-8]: "
+set /p CHOICE="Pilih menu [0-9]: "
 
 if "%CHOICE%"=="1" goto STATUS
 if "%CHOICE%"=="2" goto START
@@ -74,6 +121,7 @@ if "%CHOICE%"=="5" goto LOG
 if "%CHOICE%"=="6" goto DISABLE
 if "%CHOICE%"=="7" goto ENABLE
 if "%CHOICE%"=="8" goto UNINSTALL
+if "%CHOICE%"=="9" goto UPDATE
 if "%CHOICE%"=="0" goto END
 goto MENU
 
@@ -81,7 +129,16 @@ goto MENU
 cls
 echo ===================== STATUS LENGKAP =====================
 echo.
-echo --- Status Task Scheduler ---
+echo --- Version ---
+echo  Local  : !LOCAL_VER!
+echo  Server : !SERVER_VER! ^(!SERVER_SIZE!^)
+if "!NEED_UPDATE!"=="1" (
+    echo  Status : UPDATE TERSEDIA
+) else (
+    echo  Status : UP TO DATE
+)
+echo.
+echo --- Task Scheduler ---
 schtasks /Query /TN "%TASK_NAME%" /V /FO LIST 2>nul | findstr /I "TaskName Status Next Last"
 echo.
 echo --- Status Proses ---
@@ -96,9 +153,13 @@ echo.
 echo --- File Executable ---
 if exist "%EXE_PATH%" (
     echo Ditemukan: %EXE_PATH%
+    for %%A in ("%EXE_PATH%") do echo    Ukuran : %%~zA bytes
 ) else (
     echo TIDAK ditemukan: %EXE_PATH%
 )
+echo.
+echo --- Server Status ---
+powershell -NoProfile -Command "try { $r = Invoke-RestMethod -Uri '%SERVER_URL%/downloads/node-status?hostname=%COMPUTERNAME%' -TimeoutSec 4; if ($r.online) { Write-Output ('  Server    : ONLINE (heartbeat ' + $r.secondsAgo + 's ago, IP: ' + $r.ip + ')') } else { Write-Output ('  Server    : OFFLINE (last seen ' + $r.secondsAgo + 's ago)') } } catch { Write-Output '  Server    : unreachable' }"
 echo.
 pause
 goto MENU
@@ -123,7 +184,6 @@ echo Menghentikan agent...
 schtasks /End /TN "%TASK_NAME%" 2>nul
 taskkill /IM "%PROC_NAME%" /F >nul 2>&1
 echo [OK] Proses agent dimatikan. Memberitahu server...
-:: Agent yang di-kill paksa tidak sempat lapor offline — kirim sinyal eksplisit.
 powershell -NoProfile -Command "try { Invoke-RestMethod -Uri '%SERVER_URL%/downloads/node-offline?hostname=%COMPUTERNAME%' -Method Post -TimeoutSec 4 | Out-Null } catch {}" >nul 2>&1
 call :WAIT_OFFLINE
 echo.
@@ -156,8 +216,8 @@ set LOG_FOUND=0
 for %%F in ("%TARGET_DIR%\*.log") do (
     set LOG_FOUND=1
     echo.
-    echo --- %%~nxF (50 baris terakhir) ---
-    powershell -Command "Get-Content -Path '%%F' -Tail 50 -ErrorAction SilentlyContinue"
+    echo --- %%~nxF ^(50 baris terakhir^) ---
+    powershell -NoProfile -Command "Get-Content -Path '%%F' -Tail 50 -ErrorAction SilentlyContinue"
 )
 if !LOG_FOUND! == 0 (
     echo Tidak ada file .log di %TARGET_DIR%
@@ -225,6 +285,42 @@ echo.
 pause
 goto END
 
+:UPDATE
+cls
+call :DO_UPDATE
+echo.
+pause
+goto MENU
+
+:: ============================================================
+:: DO_UPDATE — delegasi ke PowerShell script di server.
+:: Semua logika update (download, backup, replace, restart, wait)
+:: ada di update-agent.ps1 supaya bebas dari masalah escaping batch.
+:: ============================================================
+:DO_UPDATE
+set UPDATER_PS=%TEMP%\printserver-update-agent.ps1
+echo Mengunduh updater script...
+powershell -NoProfile -Command "Invoke-WebRequest -Uri '%SERVER_URL%/downloads/update-agent.ps1' -OutFile '%UPDATER_PS%' -TimeoutSec 30"
+if not exist "%UPDATER_PS%" (
+    echo [GAGAL] Tidak bisa download updater script dari server.
+    goto :UPDATE_DONE
+)
+
+:: Jalankan updater PowerShell. Semua step + progress bar ditangani di sana.
+powershell -NoProfile -ExecutionPolicy Bypass -File "%UPDATER_PS%" -ServerUrl "%SERVER_URL%" -TargetDir "%TARGET_DIR%" -TaskName "%TASK_NAME%"
+set UPD_RESULT=!ERRORLEVEL!
+
+del "%UPDATER_PS%" 2>nul
+
+if "!UPD_RESULT!"=="0" (
+    :: Update sukses — refresh variabel lokal
+    set LOCAL_VER=!SERVER_VER!
+    set NEED_UPDATE=0
+)
+
+:UPDATE_DONE
+goto :eof
+
 :END
 echo.
 echo Keluar dari Node Agent Manager.
@@ -246,10 +342,8 @@ echo  ------------------------------------------------------------
 :WAIT_LOOP
 set /a TRY+=1
 
-:: Query endpoint node-status. PowerShell: return "ONLINE" jika online=true.
 for /f "usebackq delims=" %%R in (`powershell -NoProfile -Command "try { $r = Invoke-RestMethod -Uri '%SERVER_URL%/downloads/node-status?hostname=%COMPUTERNAME%' -TimeoutSec 4; if ($r.online) { 'ONLINE:' + $r.secondsAgo + ':' + $r.ip } else { 'WAIT' } } catch { 'ERR' }"`) do set RESULT=%%R
 
-:: Bangun progress bar berdasar jumlah percobaan
 set BAR=
 for /l %%i in (1,1,%TRY%) do set BAR=!BAR!#
 set SPACE=
@@ -268,7 +362,6 @@ if !errorLevel! == 0 (
     echo   [SUKSES] Agent ONLINE dan diterima server!
     echo   - Heartbeat terakhir : !SECS! detik lalu
     echo   - IP terdaftar       : !NODEIP!
-    echo   - Dashboard sekarang menampilkan node ini sebagai ONLINE.
     echo  ============================================================
     goto :eof
 )
@@ -319,7 +412,6 @@ if !errorLevel! == 0 (
     echo.
     echo  ============================================================
     echo   [SUKSES] Agent sudah OFFLINE di server.
-    echo   - Dashboard sekarang menampilkan node ini sebagai OFFLINE.
     echo  ============================================================
     goto :eof
 )
