@@ -2,6 +2,41 @@ import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import fs from 'fs';
 import path from 'path';
 
+/**
+ * Set secure download headers for .bat files.
+ * Prevents Chrome/Edge "dangerous file" warnings and MIME-sniff attacks.
+ */
+function setBatDownloadHeaders(reply: FastifyReply, filename: string, bodyLength?: number) {
+    reply
+        .header('Content-Type', 'application/x-msdos-program')
+        .header('Content-Disposition', `attachment; filename="${filename}"`)
+        .header('X-Content-Type-Options', 'nosniff')
+        .header('Content-Security-Policy', "default-src 'none'")
+        .header('Cache-Control', 'no-store, no-cache, must-revalidate')
+        .header('Pragma', 'no-cache');
+    if (bodyLength !== undefined) {
+        reply.header('Content-Length', bodyLength);
+    }
+    return reply;
+}
+
+/**
+ * Set secure download headers for script files (.ps1, .cmd, etc).
+ */
+function setScriptDownloadHeaders(reply: FastifyReply, filename: string, contentType: string, bodyLength?: number) {
+    reply
+        .header('Content-Type', contentType)
+        .header('Content-Disposition', `attachment; filename="${filename}"`)
+        .header('X-Content-Type-Options', 'nosniff')
+        .header('Content-Security-Policy', "default-src 'none'")
+        .header('Cache-Control', 'no-store, no-cache, must-revalidate')
+        .header('Pragma', 'no-cache');
+    if (bodyLength !== undefined) {
+        reply.header('Content-Length', bodyLength);
+    }
+    return reply;
+}
+
 const CLIENT_AGENT_PATH = '/root/serverbot/print/printserver/apps/client-agent/dist/printserver-agent.exe';
 const AGENT_PACKAGE_JSON = '/root/serverbot/print/printserver/apps/client-agent/package.json';
 
@@ -40,7 +75,7 @@ export async function setupDownloadsRoutes(fastify: FastifyInstance) {
     const serveScriptDynamic = (
         diskPath: string,
         downloadName: string,
-        contentType = 'application/x-msdos-program'
+        contentType?: string,
     ) => async (request: FastifyRequest, reply: FastifyReply) => {
         if (!fs.existsSync(diskPath)) {
             return reply.status(404).send({ error: `${downloadName} not found` });
@@ -49,9 +84,8 @@ export async function setupDownloadsRoutes(fastify: FastifyInstance) {
         const raw = fs.readFileSync(diskPath, 'utf8');
         // Replace any hardcoded http://<ip-or-host>:3000 with the live API base.
         const body = raw.replace(/http:\/\/[0-9A-Za-z.\-]+:3000/g, apiBase);
-        reply
-            .header('Content-Type', contentType)
-            .header('Content-Disposition', `attachment; filename="${downloadName}"`)
+        const ct = contentType || (downloadName.endsWith('.bat') ? 'application/x-msdos-program' : 'text/plain');
+        setScriptDownloadHeaders(reply, downloadName, ct, Buffer.byteLength(body))
             .send(body);
     };
 
@@ -128,9 +162,8 @@ export async function setupDownloadsRoutes(fastify: FastifyInstance) {
             .replace(/(\$server(?:Host)?\s*=\s*)"[^"]*"/g, `$1"${host}"`)
             .replace(/([0-9]{1,3}(?:\.[0-9]{1,3}){3}):631/g, `${host}:631`)
             .replace(/([0-9]{1,3}(?:\.[0-9]{1,3}){3}):3000/g, `${host}:3000`);
-        reply
-            .header('Content-Type', 'application/octet-stream')
-            .header('Content-Disposition', `attachment; filename="${filename}"`)
+        const ct = filename.endsWith('.ps1') ? 'text/plain' : 'application/octet-stream';
+        setScriptDownloadHeaders(reply, filename, ct, Buffer.byteLength(body))
             .send(body);
     };
 
@@ -494,10 +527,7 @@ export async function setupDownloadsRoutes(fastify: FastifyInstance) {
             ].join('\r\n');
 
             const safeFilename = `Install-${row.slug}.bat`.replace(/[^A-Za-z0-9._-]/g, '_');
-            reply
-                .header('Content-Type', 'application/x-msdos-program')
-                .header('Content-Disposition', `attachment; filename="${safeFilename}"`)
-                .header('Content-Length', Buffer.byteLength(bat))
+            setBatDownloadHeaders(reply, safeFilename, Buffer.byteLength(bat))
                 .send(bat);
         } catch (err: any) {
             return reply.status(500).send({ error: 'generate failed' });
