@@ -412,8 +412,8 @@ export async function setupDownloadsRoutes(fastify: FastifyInstance) {
                 'echo --------------------------------------------------------------',
                 'echo.',
                 '',
-                ':: --- [0/4] Test koneksi ke port RAW printer ---',
-                'echo  [0/4] Menguji koneksi ke !SERVER_HOST!:!RAW_PORT!...',
+                ':: --- [0/5] Test koneksi ke port RAW printer ---',
+                'echo  [0/5] Menguji koneksi ke !SERVER_HOST!:!RAW_PORT!...',
                 `powershell -NoProfile -Command "$t=Test-NetConnection -ComputerName '!SERVER_HOST!' -Port !RAW_PORT! -WarningAction SilentlyContinue; if($t.TcpTestSucceeded){ exit 0 } else { exit 1 }" >nul 2>&1`,
                 'if not !errorLevel! == 0 (',
                 '    echo        [GAGAL] Tidak bisa terhubung ke !SERVER_HOST!:!RAW_PORT!',
@@ -430,11 +430,11 @@ export async function setupDownloadsRoutes(fastify: FastifyInstance) {
                 ')',
                 'echo        [OK] Koneksi OK.',
                 '',
-                'echo  [1/4] Membuat Standard TCP/IP port (RAW)...',
+                'echo  [1/5] Membuat Standard TCP/IP port (RAW)...',
                 `powershell -NoProfile -Command "if (-not (Get-PrinterPort -Name '!PORT_NAME!' -ErrorAction SilentlyContinue)) { Add-PrinterPort -Name '!PORT_NAME!' -PrinterHostAddress '!SERVER_HOST!' -PortNumber !RAW_PORT! }" >nul 2>&1`,
                 'if !errorLevel! == 0 (echo        [OK] Port siap.) else (echo        [!] Port mungkin sudah ada, lanjut.)',
                 '',
-                'echo  [2/4] Auto-detect driver & memasang printer...',
+                'echo  [2/5] Auto-detect driver & memasang printer...',
                 // Auto-detect driver: uses foreach loops (no pipes) and single-quoted strings only,
                 // so cmd.exe doesn't interfere with PowerShell syntax.
                 // Searches: exact match → model keywords from driver name → manufacturer fallbacks.
@@ -454,11 +454,60 @@ export async function setupDownloadsRoutes(fastify: FastifyInstance) {
                 '    exit /b 1',
                 ')',
                 '',
-                'echo  [3/4] Mematikan bidirectional (hilangkan balon communication error)...',
+                '',
+                // ── Step 3/5: Configure label paper size ──
+                // Sends ZPL to set printer firmware label size AND modifies
+                // the Windows driver's DEVMODE registry so the driver renders
+                // at the correct size (6cm x 5cm). Without this, the driver
+                // defaults to A4/Letter and scales content up.
+                ...((): string[] => {
+                    // ZPL: 60mm x 50mm at 203 DPI → 480 x 400 dots
+                    // DEVMODE: 60mm=600, 50mm=500 (1/10mm)
+                    const psScript = [
+                        `$host_name = '${row.client_ip || ''}';`,
+                        `$raw_port = ${row.raw_port || 9100};`,
+                        `$printer_name = '${(row.name || '').replace(/'/g, "''")}';`,
+                        `$pw = 480; $ll = 400;  # dots at 203 DPI: 60mm x 50mm`,
+                        `$dw = 600; $dh = 500;  # 1/10mm: 60mm x 50mm`,
+                        ``,
+                        `# 1) Send ZPL to printer firmware via RAW TCP`,
+                        `try {`,
+                        `  $tcp = New-Object System.Net.Sockets.TcpClient($host_name, $raw_port)`,
+                        `  $st = $tcp.GetStream()`,
+                        `  $zpl = [char]10 + 'XA' + [char]10 + 'PW' + $pw + [char]10 + 'LL' + $ll + [char]10 + 'JUS' + [char]10 + 'XZ' + [char]10`,
+                        `  $b = [System.Text.Encoding]::ASCII.GetBytes($zpl)`,
+                        `  $st.Write($b, 0, $b.Length)`,
+                        `  $st.Close(); $tcp.Close()`,
+                        `  Write-Host '  [OK] Label size sent to printer firmware (60x50mm)'`,
+                        `} catch { Write-Host ('  [!] ZPL send failed: ' + $_.Exception.Message) }`,
+                        ``,
+                        `# 2) Set Windows driver default paper size via DEVMODE registry`,
+                        `try {`,
+                        `  $rp = 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Print\\Printers\\' + $printer_name + '\\DefaultDevMode'`,
+                        `  if (Test-Path $rp) {`,
+                        `    $bytes = (Get-ItemProperty -Path $rp -ErrorAction Stop).'(default)'`,
+                        `    if ($bytes -and $bytes.Length -ge 34) {`,
+                        `      $bytes[28] = 0; $bytes[29] = 1  # dmPaperSize = 256 (custom)`,
+                        `      $bytes[30] = [byte]($dh % 256); $bytes[31] = [byte]([int]($dh / 256))  # dmPaperLength`,
+                        `      $bytes[32] = [byte]($dw % 256); $bytes[33] = [byte]([int]($dw / 256))  # dmPaperWidth`,
+                        `      Set-ItemProperty -Path $rp -Name '(default)' -Value $bytes`,
+                        `      Write-Host '  [OK] Driver default paper size set to 60x50mm'`,
+                        `    } else { Write-Host '  [!] DEVMODE too small, skipping' }`,
+                        `  } else { Write-Host '  [!] Registry path not found, skipping' }`,
+                        `} catch { Write-Host ('  [!] Registry config failed: ' + $_.Exception.Message) }`,
+                    ].join('\n');
+                    const psBase64 = Buffer.from(psScript, 'utf16le').toString('base64');
+                    return [
+                        'echo  [3/5] Konfigurasi ukuran label (60x50mm)...',
+                        `powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${psBase64}`,
+                    ];
+                })(),
+                '',
+                'echo  [4/5] Mematikan bidirectional (hilangkan balon communication error)...',
                 'rundll32 printui.dll,PrintUIEntry /Xs /n "!PRINTER_NAME!" EnableBIDI disable >nul 2>&1',
                 'echo        [OK] Bidirectional dimatikan.',
                 '',
-                'echo  [4/4] Verifikasi...',
+                'echo  [5/5] Verifikasi...',
                 'timeout /t 3 /nobreak >nul',
                 `powershell -NoProfile -Command "if (Get-Printer -Name '!PRINTER_NAME!' -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }" >nul 2>&1`,
                 'if !errorLevel! == 0 (',
