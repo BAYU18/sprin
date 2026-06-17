@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || '';
 
@@ -49,6 +49,10 @@ export default function SharingPage() {
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [selectedNode, setSelectedNode] = useState<string>('all');
+  const [nodeSearch, setNodeSearch] = useState('');
+  const [nodeDropdownOpen, setNodeDropdownOpen] = useState(false);
+  const nodeRef = useRef<HTMLDivElement>(null);
+  const [statusFilter, setStatusFilter] = useState<string>('all');
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
 
   useEffect(() => {
@@ -61,6 +65,43 @@ export default function SharingPage() {
     setTheme(next);
     localStorage.setItem('ps-theme', next);
   };
+
+  // Click outside to close node dropdown
+  useEffect(() => {
+    if (!nodeDropdownOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (nodeRef.current && !nodeRef.current.contains(e.target as HTMLElement)) {
+        setNodeDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [nodeDropdownOpen]);
+
+  // Build node list with online status from data
+  const nodeList = useMemo(() => {
+    if (!data) return [];
+    const map = new Map<string, boolean>();
+    data.nodes.forEach(n => map.set(n.hostname, n.is_online));
+    return Array.from(new Set(data.printers.map(p => p.node_hostname)))
+      .filter(n => n !== 'Unassigned')
+      .sort((a, b) => a.localeCompare(b));
+  }, [data]);
+
+  // Filter nodes by search text
+  const filteredNodes = useMemo(() => {
+    if (!nodeSearch) return nodeList;
+    const q = nodeSearch.toLowerCase();
+    return nodeList.filter(n => n.toLowerCase().includes(q));
+  }, [nodeList, nodeSearch]);
+
+  // Compute online status for each node name
+  const nodeOnlineMap = useMemo(() => {
+    if (!data) return new Map<string, boolean>();
+    const map = new Map<string, boolean>();
+    data.nodes.forEach(n => map.set(n.hostname, n.is_online));
+    return map;
+  }, [data]);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -93,9 +134,11 @@ export default function SharingPage() {
         p.node_hostname.toLowerCase().includes(search.toLowerCase()) ||
         p.driver?.toLowerCase().includes(search.toLowerCase());
       const matchNode = selectedNode === 'all' || p.node_hostname === selectedNode;
-      return matchSearch && matchNode;
+      const effectiveStatus = !p.node_online ? 'offline' : p.status;
+      const matchStatus = statusFilter === 'all' || effectiveStatus === statusFilter;
+      return matchSearch && matchNode && matchStatus;
     });
-  }, [data, search, selectedNode]);
+  }, [data, search, selectedNode, statusFilter]);
 
   const getStatusColor = (status: string, nodeOnline: boolean) => {
     if (!nodeOnline) return 'var(--accent-red)';
@@ -211,84 +254,229 @@ export default function SharingPage() {
             {/* Stats Header */}
             <div style={{
               display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+              gridTemplateColumns: 'repeat(2, 1fr)',
               gap: '12px',
               marginBottom: '24px',
             }}>
               {[
-                { label: 'Node Aktif', value: data.stats.active_nodes, total: data.stats.total_nodes, color: 'var(--accent-green)', icon: '🖥️' },
-                { label: 'Node Offline', value: data.stats.inactive_nodes, total: data.stats.total_nodes, color: 'var(--accent-red)', icon: '💤' },
-                { label: 'Printer Aktif', value: data.stats.active_printers, total: data.stats.total_printers, color: 'var(--accent-green)', icon: '🖨️' },
-                { label: 'Printer Offline', value: data.stats.inactive_printers, total: data.stats.total_printers, color: 'var(--accent-amber)', icon: '📴' },
-                { label: 'Total Halaman', value: data.stats.total_pages, color: 'var(--accent-cyan)', icon: '📄' },
+                { value: data.stats.active_nodes, color: 'var(--accent-green)', icon: '🖥️', accent: '#00ff88' },
+                { value: data.stats.inactive_nodes, color: 'var(--accent-red)', icon: '💤', accent: '#ff3d5a' },
+                { value: data.stats.active_printers, color: 'var(--accent-green)', icon: '🖨️', accent: '#00ff88' },
+                { value: data.stats.inactive_printers, color: 'var(--accent-amber)', icon: '📴', accent: '#f59e0b' },
               ].map((stat, i) => (
                 <div key={i} style={{
                   background: 'var(--bg-card)',
                   border: '1px solid var(--border)',
+                  borderLeft: `3px solid ${stat.accent}`,
                   borderRadius: '12px',
-                  padding: '16px',
+                  padding: '16px 20px',
                   display: 'flex',
                   alignItems: 'center',
-                  gap: '12px',
+                  gap: '14px',
+                  position: 'relative',
                 }}>
-                  <div style={{ fontSize: '24px' }}>{stat.icon}</div>
-                  <div>
-                    <div style={{ fontSize: '24px', fontWeight: '700', color: stat.color }}>
-                      {stat.value}
-                    </div>
-                    <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                      {stat.label}
-                      {stat.total !== undefined && ` / ${stat.total}`}
-                    </div>
+                  <div style={{
+                    width: '40px', height: '40px', borderRadius: '10px',
+                    background: `${stat.accent}15`,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    fontSize: '20px', flexShrink: 0,
+                  }}>{stat.icon}</div>
+                  <div style={{ fontSize: '28px', fontWeight: '700', color: stat.color, lineHeight: 1 }}>
+                    {stat.value}
                   </div>
+                  <div style={{
+                    position: 'absolute', top: '12px', right: '12px',
+                    width: '8px', height: '8px', borderRadius: '50%',
+                    background: stat.accent,
+                  }} />
                 </div>
               ))}
+            </div>
+
+            {/* Total Halaman - full width card */}
+            <div style={{
+              background: 'var(--bg-card)',
+              border: '1px solid var(--border)',
+              borderLeft: '3px solid var(--accent-cyan)',
+              borderRadius: '12px',
+              padding: '20px 24px',
+              marginBottom: '24px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '14px',
+              position: 'relative',
+            }}>
+              <div style={{
+                width: '44px', height: '44px', borderRadius: '10px',
+                background: 'rgba(0, 212, 255, 0.1)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: '22px', flexShrink: 0,
+              }}>📄</div>
+              <div>
+                <div style={{ fontSize: '32px', fontWeight: '700', color: 'var(--accent-cyan)', lineHeight: 1 }}>
+                  {data.stats.total_pages}
+                </div>
+              </div>
+              <div style={{
+                position: 'absolute', top: '14px', right: '14px',
+                width: '8px', height: '8px', borderRadius: '50%',
+                background: 'var(--accent-cyan)',
+              }} />
             </div>
 
             {/* Toolbar */}
             <div style={{
               display: 'flex',
-              gap: '12px',
+              flexDirection: 'column',
+              gap: '10px',
               marginBottom: '20px',
-              flexWrap: 'wrap',
             }}>
+              {/* Row 1: Search - full width, large */}
               <input
                 type="text"
-                placeholder="🔍 Cari printer, node, atau driver..."
+                placeholder="🔍 Cari printer..."
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 style={{
-                  flex: 1,
-                  minWidth: '200px',
+                  width: '100%',
                   background: 'var(--bg-card)',
                   border: '1px solid var(--border)',
                   borderRadius: '8px',
-                  padding: '10px 14px',
+                  padding: '12px 14px',
                   color: 'var(--text-primary)',
                   fontSize: '14px',
                   outline: 'none',
                 }}
               />
-              <select
-                value={selectedNode}
-                onChange={(e) => setSelectedNode(e.target.value)}
+              {/* Row 2: Node + Status dropdowns - side by side */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                {/* Node Search Dropdown */}
+                <div ref={nodeRef} style={{ position: 'relative' }}>
+                  <input
+                    type="text"
+                    placeholder="🖥️ Cari node..."
+                    value={nodeDropdownOpen ? nodeSearch : (selectedNode === 'all' ? '' : selectedNode)}
+                    onFocus={() => { setNodeDropdownOpen(true); setNodeSearch(''); }}
+                    onChange={(e) => { setNodeSearch(e.target.value); if (!nodeDropdownOpen) setNodeDropdownOpen(true); }}
+                    style={{
+                      width: '100%',
+                      background: 'var(--bg-card)',
+                      border: '1px solid var(--border)',
+                      borderRadius: '8px',
+                      padding: '10px 12px',
+                      color: 'var(--text-primary)',
+                      fontSize: '13px',
+                      outline: 'none',
+                      cursor: 'text',
+                      minWidth: 0,
+                    }}
+                  />
+                  {nodeDropdownOpen && (
+                    <div style={{
+                      position: 'absolute',
+                      top: '100%',
+                      left: 0,
+                      right: 0,
+                      marginTop: '4px',
+                      background: 'var(--bg-card)',
+                      border: '1px solid var(--border)',
+                      borderRadius: '8px',
+                      maxHeight: '240px',
+                      overflowY: 'auto',
+                      zIndex: 100,
+                      boxShadow: '0 8px 24px rgba(0,0,0,0.3)',
+                    }}>
+                      <div
+                        onClick={() => { setSelectedNode('all'); setNodeSearch(''); setNodeDropdownOpen(false); }}
+                        style={{
+                          padding: '10px 14px',
+                          cursor: 'pointer',
+                          fontSize: '14px',
+                          fontWeight: selectedNode === 'all' ? '600' : '400',
+                          color: selectedNode === 'all' ? 'var(--accent-cyan)' : 'var(--text-primary)',
+                          background: selectedNode === 'all' ? 'var(--bg-hover)' : 'transparent',
+                          borderBottom: '1px solid var(--border)',
+                        }}
+                      >
+                        Semua Node
+                      </div>
+                      {filteredNodes.map(n => (
+                        <div
+                          key={n}
+                          onClick={() => { setSelectedNode(n); setNodeSearch(''); setNodeDropdownOpen(false); }}
+                          style={{
+                            padding: '10px 14px',
+                            cursor: 'pointer',
+                            fontSize: '14px',
+                            fontWeight: selectedNode === n ? '600' : '400',
+                            color: selectedNode === n ? 'var(--accent-cyan)' : 'var(--text-primary)',
+                            background: selectedNode === n ? 'var(--bg-hover)' : 'transparent',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '8px',
+                          }}
+                        >
+                          <span style={{
+                            width: '8px', height: '8px', borderRadius: '50%', flexShrink: 0,
+                            background: nodeOnlineMap.get(n) ? 'var(--accent-green)' : 'var(--accent-red)',
+                          }} />
+                          {n}
+                        </div>
+                      ))}
+                      {filteredNodes.length === 0 && (
+                        <div style={{ padding: '12px 14px', fontSize: '13px', color: 'var(--text-muted)', textAlign: 'center' }}>
+                          Tidak ditemukan
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+                {/* Status filter */}
+                <select
+                  value={statusFilter}
+                  onChange={(e) => setStatusFilter(e.target.value)}
+                  style={{
+                    width: '100%',
+                    background: 'var(--bg-card)',
+                    border: '1px solid var(--border)',
+                    borderRadius: '8px',
+                    padding: '10px 12px',
+                    color: 'var(--text-primary)',
+                    fontSize: '13px',
+                    outline: 'none',
+                    cursor: 'pointer',
+                    minWidth: 0,
+                  }}
+                >
+                  <option value="all">Semua Status</option>
+                  <option value="online">🟢 Online</option>
+                  <option value="offline">🔴 Offline</option>
+                </select>
+              </div>
+              {/* Row 3: Install Agent button - full width */}
+              <a
+                href="/downloads/install-agent.bat"
+                download
+                title="Download Agent Node Installer (.bat)"
                 style={{
-                  background: 'var(--bg-card)',
-                  border: '1px solid var(--border)',
-                  borderRadius: '8px',
-                  padding: '10px 14px',
-                  color: 'var(--text-primary)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '6px',
+                  background: 'linear-gradient(135deg, var(--accent-cyan), var(--accent-green))',
+                  color: '#000',
+                  fontWeight: '600',
                   fontSize: '14px',
-                  outline: 'none',
-                  cursor: 'pointer',
-                  minWidth: '180px',
+                  padding: '12px 16px',
+                  borderRadius: '8px',
+                  textDecoration: 'none',
+                  transition: 'opacity 0.2s',
                 }}
+                onMouseEnter={(e) => (e.currentTarget.style.opacity = '0.85')}
+                onMouseLeave={(e) => (e.currentTarget.style.opacity = '1')}
               >
-                <option value="all">Semua Node</option>
-                {nodeNames.map(n => (
-                  <option key={n} value={n}>{n}</option>
-                ))}
-              </select>
+                ⬇️ Install Agent Node (.bat)
+              </a>
             </div>
 
             {/* Results count */}
