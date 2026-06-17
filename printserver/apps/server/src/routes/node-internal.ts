@@ -8,6 +8,9 @@ import { z } from 'zod';
 import { logger } from '../utils/logger.js';
 import { WindowsPrinterDriver } from '../printer-engine/drivers/windows-driver.js';
 import { createDriver } from '../printer-engine/drivers/index.js';
+import { exec } from 'child_process';
+import { promisify } from 'util';
+const execAsync = promisify(exec);
 import fs from 'fs';
 import path from 'path';
 import axios from 'axios';
@@ -78,6 +81,39 @@ export async function setupNodeInternalRoutes(fastify: FastifyInstance) {
                 return reply.status(400).send({ error: 'No file or filePath provided' });
             }
 
+            // ── ZPL Scale Compensation (image fallback) ──────────────────
+            // Server already scaled PDFs via ghostscript. For images that
+            // couldn't be scaled server-side, scale here via PowerShell.
+            const IMAGE_EXTS = ['.png', '.jpg', '.jpeg', '.tif', '.tiff', '.bmp', '.gif'];
+            const scaleFactor: number | undefined = options?.scale_factor;
+            let scaledFilePath = filePath;
+            if (scaleFactor && scaleFactor > 0 && scaleFactor < 1
+                && IMAGE_EXTS.includes(path.extname(filePath).toLowerCase())) {
+                const scaledPath = filePath.replace(/(\.[^.]+)$/, '_scaled$1');
+                const psScript = [
+                    `Add-Type -AssemblyName System.Drawing`,
+                    `$src = [System.Drawing.Image]::FromFile('${filePath.replace(/'/g, "''")}')`,
+                    `$scale = ${scaleFactor}`,
+                    `$newW = [Math]::Max(1, [int]($src.Width * $scale))`,
+                    `$newH = [Math]::Max(1, [int]($src.Height * $scale))`,
+                    `$bmp = New-Object System.Drawing.Bitmap($newW, $newH)`,
+                    `$g = [System.Drawing.Graphics]::FromImage($bmp)`,
+                    `$g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic`,
+                    `$g.DrawImage($src, 0, 0, $newW, $newH)`,
+                    `$bmp.Save('${scaledPath.replace(/'/g, "''")}')`,
+                    `$g.Dispose(); $bmp.Dispose(); $src.Dispose()`,
+                ].join('; ');
+                try {
+                    await execAsync(`powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "${psScript}"`, { timeout: 15000 });
+                    scaledFilePath = scaledPath;
+                    tempFilePaths.push(scaledPath);
+                    logger.info(`[NodeAPI] Image scaled for ZPL: ${Math.round(scaleFactor * 100)}%`);
+                } catch (scaleErr: any) {
+                    logger.warn(`[NodeAPI] Image scaling failed, using original: ${scaleErr.message}`);
+                }
+            }
+            // ── End ZPL Scale Compensation ───────────────────────────────
+
             let driver = fastify.printRouter.getDriver(printerId);
 
             if (!driver) {
@@ -91,7 +127,7 @@ export async function setupNodeInternalRoutes(fastify: FastifyInstance) {
                 }
             }
 
-            await driver.print(filePath, copies, options);
+            await driver.print(scaledFilePath, copies, options);
 
             if (fs.existsSync(filePath)) {
                 try {

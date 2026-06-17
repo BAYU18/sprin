@@ -12,6 +12,7 @@ import FormData from 'form-data';
 import fs from 'fs';
 import path from 'path';
 import { Readable } from 'stream';
+import { scaleForZpl, cleanupScaledFile } from '../utils/file-scaler.js';
 
 export interface IPrintNode {
     id: number;
@@ -241,6 +242,46 @@ export class CentralPrintRouter {
 
         logger.info(`[CentralRouter] Routing job ${fileName} to node ${node.node_name} (${node.api_url})`);
 
+        // ── ZPL printer scaling compensation ──────────────────────────────
+        // If the printer's config has a scale_factor AND the printer type is
+        // 'zpl', pre-scale the file to compensate for the Windows driver's
+        // EMF→ZPL zoom behavior.  PDFs are scaled on the server via ghostscript;
+        // images are marked for client-side scaling via PowerShell.
+        let scaledFilePath = filePath;
+        let clientScaleFactor: number | null = null;
+        let scaledFileCleanup = false;
+
+        try {
+            const printerRecord = await this.fastify.knex('printers').where({ id: printerId }).first();
+            const printerConfig = printerRecord?.config
+                ? (typeof printerRecord.config === 'string' ? JSON.parse(printerRecord.config) : printerRecord.config)
+                : {};
+            const scaleFactor: number | undefined = printerConfig?.scale_factor;
+
+            if (scaleFactor && scaleFactor > 0 && scaleFactor < 1) {
+                logger.info(`[CentralRouter] ZPL scale compensation active: ${(scaleFactor * 100).toFixed(0)}% for ${printerRecord?.name}`);
+                const result = await scaleForZpl(filePath, scaleFactor, fileType);
+                scaledFilePath = result.scaledFilePath;
+
+                if (result.clientScale) {
+                    // Server couldn't scale (image or GS failure) — tell client
+                    clientScaleFactor = scaleFactor;
+                } else {
+                    scaledFileCleanup = true; // temp file needs cleanup
+                }
+            }
+        } catch (scaleErr: any) {
+            logger.warn(`[CentralRouter] ZPL scale failed, printing original: ${scaleErr.message}`);
+            // Fall through — print original file
+        }
+
+        // Merge scale_factor into options for the client (client-side fallback)
+        const mergedOptions = { ...options };
+        if (clientScaleFactor !== null) {
+            mergedOptions.scale_factor = clientScaleFactor;
+        }
+        // ── End ZPL scaling ────────────────────────────────────────────────
+
         const [printJob] = await this.fastify.knex('print_jobs')
             .insert({
                 user_id: data.userId,
@@ -263,9 +304,9 @@ export class CentralPrintRouter {
             const formData = new FormData();
             formData.append('jobId', printJob.job_id);
             formData.append('printerId', printerId.toString());
-            formData.append('file', fs.createReadStream(filePath), fileName);
+            formData.append('file', fs.createReadStream(scaledFilePath), fileName);
             formData.append('copies', (copies || 1).toString());
-            formData.append('options', JSON.stringify(options || {}));
+            formData.append('options', JSON.stringify(mergedOptions));
 
             const response = await client.post('/internal/print', formData, {
                 headers: formData.getHeaders(),
@@ -287,6 +328,9 @@ export class CentralPrintRouter {
                 logger.info(`[CentralRouter] Job ${printJob.job_id} sent to node ${node.node_name}`);
             }
 
+            // Cleanup temp scaled file
+            if (scaledFileCleanup) cleanupScaledFile(scaledFilePath);
+
             return {
                 jobId: printJob.job_id,
                 routedTo: node.node_name
@@ -294,7 +338,8 @@ export class CentralPrintRouter {
 
         } catch (error: any) {
             logger.error(`[CentralRouter] Failed to send job to node ${node.node_name}:`, error.message);
-
+            // Cleanup temp scaled file on error too
+            if (scaledFileCleanup) cleanupScaledFile(scaledFilePath);
             logger.info(`[CentralRouter] Attempting failover for job ${printJob.job_id}...`);
 
             const backup = await this.findBackupNode(printerId, node.id);

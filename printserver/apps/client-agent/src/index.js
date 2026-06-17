@@ -458,12 +458,57 @@ class SpoolWatcher extends EventEmitter {
 class JobExecutor {
   constructor() {
     this.sumatraPDFPath = this.findSumatraPDF();
+    // ZPL printer scale compensation: image extensions that need client-side scaling
+    this.IMAGE_EXTS = ['.png', '.jpg', '.jpeg', '.tif', '.tiff', '.bmp', '.gif'];
     // Cache printer port detection (WMI Get-CimInstance is slow — 10-40s on
     // some boxes). Key = printer name, value = { host, port } | null.
     // TTL keeps it fresh if a printer's port config changes.
     this._portCache = new Map();
     this._portCacheTtlMs = 10 * 60 * 1000; // 10 minutes
   }
+
+  // ── ZPL Scale Compensation ──────────────────────────────────────────────
+  // Scale an image file using PowerShell System.Drawing.
+  // Returns path to the scaled image (temp file). Caller is responsible for cleanup.
+  async scaleImageFile(filePath, scaleFactor) {
+    if (!scaleFactor || scaleFactor <= 0 || scaleFactor >= 1) return filePath;
+
+    const ext = path.extname(filePath).toLowerCase();
+    if (!this.IMAGE_EXTS.includes(ext)) return filePath;
+
+    const scaledPath = filePath.replace(/(\.[^.]+)$/, `_scaled$1`);
+
+    // PowerShell: System.Drawing to resize image
+    const psScript = `
+Add-Type -AssemblyName System.Drawing
+$src = [System.Drawing.Image]::FromFile('${filePath.replace(/'/g, "''")}')
+$scale = ${scaleFactor}
+$newW = [Math]::Max(1, [int]($src.Width * $scale))
+$newH = [Math]::Max(1, [int]($src.Height * $scale))
+$bmp = New-Object System.Drawing.Bitmap($newW, $newH)
+$g = [System.Drawing.Graphics]::FromImage($bmp)
+$g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+$g.DrawImage($src, 0, 0, $newW, $newH)
+$bmp.Save('${scaledPath.replace(/'/g, "''")}')
+$g.Dispose(); $bmp.Dispose(); $src.Dispose()
+Write-Output 'OK'
+`.trim();
+
+    try {
+      await execPS(psScript);
+      logger.info('Image scaled for ZPL compensation', {
+        original: filePath,
+        scaled: scaledPath,
+        factor: scaleFactor,
+        newDimensions: `${Math.round(scaleFactor * 100)}%`
+      });
+      return scaledPath;
+    } catch (err) {
+      logger.warn('Image scaling failed, using original', { error: err.message });
+      return filePath;
+    }
+  }
+  // ── End ZPL Scale Compensation ──────────────────────────────────────────
 
   findSumatraPDF() {
     const locations = [
@@ -1284,7 +1329,7 @@ Compress-Archive -Path '${exportDir.replace(/'/g, "''")}\\*' -DestinationPath '$
   }
 
   async handlePrintJob(data) {
-    const { jobId, printerName, fileName, copies, fileData, fileType, tempDir, paper } = data || {};
+    const { jobId, printerName, fileName, copies, fileData, fileType, tempDir, paper, options } = data || {};
     if (!jobId) {
       logger.warn('print:execute missing jobId', { data });
       return;
@@ -1299,16 +1344,31 @@ Compress-Archive -Path '${exportDir.replace(/'/g, "''")}\\*' -DestinationPath '$
         fs.mkdirSync(dir, { recursive: true });
       }
       const safeName = (fileName || `job-${jobId}`).replace(/[^a-zA-Z0-9._-]/g, '_');
-      const filePath = path.join(dir, `${Date.now()}_${safeName}`);
+      let filePath = path.join(dir, `${Date.now()}_${safeName}`);
       const buffer = Buffer.from(fileData || '', 'base64');
       fs.writeFileSync(filePath, buffer);
+
+      // ── ZPL Scale Compensation (client-side for images) ──────────────────
+      // Server sends scale_factor in options when it couldn't scale the file
+      // (e.g. images). We scale here via PowerShell System.Drawing.
+      let scaledFilePath = filePath;
+      const scaleFactor = options?.scale_factor;
+      if (scaleFactor && this.executor) {
+        try {
+          scaledFilePath = await this.executor.scaleImageFile(filePath, scaleFactor);
+        } catch (scaleErr) {
+          logger.warn('Client-side ZPL scale failed, using original', { error: scaleErr.message });
+          scaledFilePath = filePath;
+        }
+      }
+      // ── End ZPL Scale Compensation ──────────────────────────────────────
 
       // Execute the print job
       const result = this.executor
         ? await this.executor.execute({
             id: jobId,
             printer: printerName,
-            filePath,
+            filePath: scaledFilePath,
             fileName,
             fileType,
             copies: copies || 1,
@@ -1316,7 +1376,8 @@ Compress-Archive -Path '${exportDir.replace(/'/g, "''")}\\*' -DestinationPath '$
           })
         : { success: false, error: 'no executor configured' };
 
-      // Cleanup spool file
+      // Cleanup spool file + scaled file
+      try { if (filePath !== scaledFilePath) fs.unlinkSync(scaledFilePath); } catch (e) { /* ignore */ }
       try { fs.unlinkSync(filePath); } catch (e) { /* ignore */ }
 
       // Send result back to server
