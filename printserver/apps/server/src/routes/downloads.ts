@@ -333,9 +333,10 @@ export async function setupDownloadsRoutes(fastify: FastifyInstance) {
                     'printers.name as name',
                     'printers.slug as slug',
                     'printers.raw_port as raw_port',
-                    'clients.hostname as node',
-                    'printer_drivers.name as driver',
-                )
+                   'clients.hostname as node',
+                   'printer_drivers.name as driver',
+                   'printer_drivers.windows_driver_name as windows_driver',
+               )
                 .whereRaw('LOWER(printers.slug) = ?', [slug.toLowerCase()])
                 .first();
 
@@ -360,7 +361,12 @@ export async function setupDownloadsRoutes(fastify: FastifyInstance) {
             // Fallback to the Epson ESC/P-R class driver which is what proved to
             // work for the LX-310 over TCP/IP. Generic IPP class driver is a last
             // resort and only valid if actually installed on the client PC.
-            const driver = (row.driver && String(row.driver).trim()) || 'Epson ESC/P-R V4 Class Driver';
+            // Prefer windows_driver_name (actual name in Windows) over the
+            // auto-harvested driver name which may contain node suffixes like
+            // "(from IT-99)" that don't match the installed driver on the client.
+            const driver = (row.windows_driver && String(row.windows_driver).trim())
+                || (row.driver && String(row.driver).trim())
+                || 'Epson ESC/P-R V4 Class Driver';
             // Sanitize for safe embedding in the .bat (printer names can contain
             // spaces/parens — fine inside quotes, but strip CR/LF, %, and /
             // (forward-slash breaks Windows Print Spooler name resolution).
@@ -428,8 +434,11 @@ export async function setupDownloadsRoutes(fastify: FastifyInstance) {
                 `powershell -NoProfile -Command "if (-not (Get-PrinterPort -Name '!PORT_NAME!' -ErrorAction SilentlyContinue)) { Add-PrinterPort -Name '!PORT_NAME!' -PrinterHostAddress '!SERVER_HOST!' -PortNumber !RAW_PORT! }" >nul 2>&1`,
                 'if !errorLevel! == 0 (echo        [OK] Port siap.) else (echo        [!] Port mungkin sudah ada, lanjut.)',
                 '',
-                'echo  [2/4] Memasang printer...',
-                `powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $n='!PRINTER_NAME!'; $p='!PORT_NAME!'; $d='!DRIVER!'; $ex=Get-Printer -Name $n -ErrorAction SilentlyContinue; if($ex){ Remove-Printer -Name $n -ErrorAction SilentlyContinue }; Add-Printer -Name $n -DriverName $d -PortName $p -ErrorAction Stop; exit 0 } catch { Write-Error $_.Exception.Message; exit 1 }" 2>%TEMP%\\ps_addprn_err.txt`,
+                'echo  [2/4] Auto-detect driver & memasang printer...',
+                // Auto-detect driver: uses foreach loops (no pipes) and single-quoted strings only,
+                // so cmd.exe doesn't interfere with PowerShell syntax.
+                // Searches: exact match → model keywords from driver name → manufacturer fallbacks.
+                `powershell -NoProfile -ExecutionPolicy Bypass -Command "$d='!DRIVER!'; $n='!PRINTER_NAME!'; $p='!PORT_NAME!'; $ex=Get-Printer -Name $n -ErrorAction SilentlyContinue; if($ex){ Remove-Printer -Name $n -ErrorAction SilentlyContinue }; $all=Get-PrinterDriver -ErrorAction SilentlyContinue; $found=$false; foreach($x in $all){ if($x.Name -eq $d){ $found=$true; break } }; if(-not $found){ foreach($kw in ($d -split '\\s+')){ if($kw.Length -ge 3){ foreach($x in $all){ if($x.Name -like ('*'+$kw+'*')){ $d=$x.Name; $found=$true; break } }; if($found){ break } } }; if(-not $found){ foreach($kw in @('Zebra','Epson','Canon','HP','Brother')){ foreach($x in $all){ if($x.Name -like ('*'+$kw+'*')){ $d=$x.Name; $found=$true; break } }; if($found){ break } } } }; try { Add-Printer -Name $n -DriverName $d -PortName $p -ErrorAction Stop; exit 0 } catch { Write-Error $_.Exception.Message; exit 1 }" 2>%TEMP%\\\\ps_addprn_err.txt`,
                 'if !errorLevel! == 0 (',
                 '    echo        [OK] Perintah pasang dikirim.',
                 ') else (',

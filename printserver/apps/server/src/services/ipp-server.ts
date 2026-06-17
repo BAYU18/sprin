@@ -324,27 +324,61 @@ export class IPPServer {
 
         const now = new Date();
         const stamp = now.toISOString().replace('T', ' ').slice(0, 19);
-        // Build a compact single-page test page. ESC @ resets the printer,
-        // the body is plain text, and a form feed (0x0C) ejects exactly one page.
-        const ESC = '\x1b';
-        const body = [
-            `${ESC}@`,                                  // initialize / reset
-            '================================',
-            '   PrintServer Pro - TEST PAGE',
-            '================================',
-            '',
-            `Printer : ${printer.name}`,
-            `Node ID : ${printer.client_id}`,
-            `Job time: ${stamp} UTC`,
-            '',
-            'If you can read this, the path',
-            'Server -> Node -> Printer works.',
-            '',
-            'Sample text: ABCDEFG abcdefg 0123456789',
-            '',
-            '--- End of test page ---',
-            '\x0c',                                      // form feed → one page
-        ].join('\r\n');
+
+        // Detect printer language: ZPL (Zebra) vs ESC/P (Epson/default).
+        // Zebra label printers need ZPL commands — sending ESC/P to them
+        // produces blank output because the printer ignores unknown escape codes.
+        let driverInfo: { name: string; manufacturer: string } | null = null;
+        if (printer.driver_id) {
+            driverInfo = await knex('printer_drivers')
+                .where({ id: printer.driver_id })
+                .select('name', 'manufacturer')
+                .first();
+        }
+        const printerLang = this.detectPrinterLanguage(printer.name, driverInfo);
+        logger.info(`[IPP] Test print: printer=${printer.name}, lang=${printerLang}`);
+
+        let body: string;
+        if (printerLang === 'zpl') {
+            // ZPL test page for Zebra label printers.
+            // ^XA = start, ^XZ = end. ^CF sets default font, ^FO^FD = field.
+            const zplName = printer.name.replace(/\^/g, '^^');  // escape ZPL special chars
+            body = [
+                '^XA',
+                '^CF0,24',
+                '^FO30,30^FDPrintServer Pro - TEST PAGE^FS',
+                '^FO30,70^FDPrinter: ' + zplName + '^FS',
+                '^FO30,100^FDNode ID: ' + printer.client_id + '^FS',
+                '^FO30,130^FDJob time: ' + stamp + ' UTC^FS',
+                '^FO30,170^FDIf you can read this,^FS',
+                '^FO30,200^FDServer -> Node -> Printer works.^FS',
+                '^FO30,240^FDSample: ABCDEF 0123456789^FS',
+                '^FO30,280^FD--- End of test page ---^FS',
+                '^XZ',
+            ].join('\r\n');
+        } else {
+            // ESC/P test page for Epson and other standard printers.
+            // ESC @ resets the printer, form feed (0x0C) ejects one page.
+            const ESC = '\x1b';
+            body = [
+                `${ESC}@`,                                  // initialize / reset
+                '================================',
+                '   PrintServer Pro - TEST PAGE',
+                '================================',
+                '',
+                `Printer : ${printer.name}`,
+                `Node ID : ${printer.client_id}`,
+                `Job time: ${stamp} UTC`,
+                '',
+                'If you can read this, the path',
+                'Server -> Node -> Printer works.',
+                '',
+                'Sample text: ABCDEFG abcdefg 0123456789',
+                '',
+                '--- End of test page ---',
+                '\\x0c',                                      // form feed → one page
+            ].join('\r\n');
+        }
 
         const base64Data = Buffer.from(body, 'latin1').toString('base64');
         const fileName = `test-page-${Date.now()}`;
@@ -412,6 +446,30 @@ export class IPPServer {
             method: result.method,
             error: result.success ? undefined : result.error,
         };
+    }
+
+    /**
+     * Detect printer command language based on printer name and driver info.
+     * Returns 'zpl' for Zebra label printers, 'escp' for Epson/standard printers.
+     * This determines the test page format — ZPL printers need ZPL commands,
+     * ESC/P printers need ESC/P commands. Sending the wrong format produces
+     * blank output because the printer ignores unrecognized escape codes.
+     */
+    private detectPrinterLanguage(
+        printerName: string,
+        driverInfo: { name: string; manufacturer: string } | null
+    ): 'zpl' | 'escp' {
+        const name = (printerName || '').toLowerCase();
+        const driverName = (driverInfo?.name || '').toLowerCase();
+        const mfr = (driverInfo?.manufacturer || '').toLowerCase();
+
+        // Zebra printers: check manufacturer, driver name, or printer name
+        if (mfr === 'zebra' || mfr.includes('zebra')) return 'zpl';
+        if (driverName.includes('zpl') || driverName.includes('zebra')) return 'zpl';
+        if (/\b(zd|zt|zq|zm|zl|zp)\d/i.test(name)) return 'zpl';  // ZD230, ZT411, ZQ520, etc.
+        if (name.includes('zdesigner') || name.includes('zebra')) return 'zpl';
+
+        return 'escp';  // default: Epson ESC/P (works for most printers)
     }
 
     // ── Connection handler ──────────────────────────────────────────────────
