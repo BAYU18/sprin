@@ -19,6 +19,7 @@ import { setupBadgesRoutes } from './badges.js';
 import { setupPrinterGroupsRoutes } from './printer-groups.js';
 import { setupHealthRoutes } from './health.js';
 import { setupQueueMgmtRoutes } from './queue-mgmt.js';
+import { setupSharingRoutes } from './sharing.js';
 import { logger } from '../utils/logger.js';
 import { cache } from '../utils/cache.js';
 
@@ -29,6 +30,7 @@ const PUBLIC_PATHS = [
     '/api/health/db',
     '/api/health/cache',
     '/api/queues/stats',           // Queue stats are read-only monitoring info
+    '/api/sharing/',               // Public sharing page data
 ];
 
 // Regex patterns for path matching (used for routes with path params).
@@ -77,6 +79,7 @@ export async function setupRoutes(fastify: FastifyInstance) {
         await instance.register(setupSettingsRoutes,      { prefix: '/settings' });
         await instance.register(setupHealthRoutes,         { prefix: '/health' });
         await instance.register(setupQueueMgmtRoutes);
+        await instance.register(setupSharingRoutes,       { prefix: '/sharing' });
 
         // POST /api/admin/cleanup-stuck-jobs — manual stuck-job cleanup trigger
         instance.post('/admin/cleanup-stuck-jobs', async (request, reply) => {
