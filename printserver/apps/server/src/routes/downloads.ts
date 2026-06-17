@@ -456,10 +456,11 @@ export async function setupDownloadsRoutes(fastify: FastifyInstance) {
                 '',
                 '',
                 // ── Step 3/5: Configure label paper size ──
-                // Sends ZPL to set printer firmware label size AND modifies
-                // the Windows driver's DEVMODE registry so the driver renders
-                // at the correct size (6cm x 5cm). Without this, the driver
-                // defaults to A4/Letter and scales content up.
+                // Three-pronged approach to ensure the driver uses 60x50mm:
+                // 1) ZPL to printer firmware (sets physical label size)
+                // 2) DEVMODE registry (default paper size for driver)
+                // 3) PrinterDriverData registry (Zebra-specific driver config)
+                // 4) Restart print spooler to force re-read of all settings
                 ...((): string[] => {
                     // ZPL: 60mm x 50mm at 203 DPI → 480 x 400 dots
                     // DEVMODE: 60mm=600, 50mm=500 (1/10mm)
@@ -481,7 +482,7 @@ export async function setupDownloadsRoutes(fastify: FastifyInstance) {
                         `  Write-Host '  [OK] Label size sent to printer firmware (60x50mm)'`,
                         `} catch { Write-Host ('  [!] ZPL send failed: ' + $_.Exception.Message) }`,
                         ``,
-                        `# 2) Set Windows driver default paper size via DEVMODE registry`,
+                        `# 2) Set DefaultDevMode registry (generic Windows driver setting)`,
                         `try {`,
                         `  $rp = 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Print\\Printers\\' + $printer_name + '\\DefaultDevMode'`,
                         `  if (Test-Path $rp) {`,
@@ -491,15 +492,43 @@ export async function setupDownloadsRoutes(fastify: FastifyInstance) {
                         `      $bytes[30] = [byte]($dh % 256); $bytes[31] = [byte]([int]($dh / 256))  # dmPaperLength`,
                         `      $bytes[32] = [byte]($dw % 256); $bytes[33] = [byte]([int]($dw / 256))  # dmPaperWidth`,
                         `      Set-ItemProperty -Path $rp -Name '(default)' -Value $bytes`,
-                        `      Write-Host '  [OK] Driver default paper size set to 60x50mm'`,
-                        `    } else { Write-Host '  [!] DEVMODE too small, skipping' }`,
-                        `  } else { Write-Host '  [!] Registry path not found, skipping' }`,
-                        `} catch { Write-Host ('  [!] Registry config failed: ' + $_.Exception.Message) }`,
-                    ].join('\n');
+                        `      Write-Host '  [OK] DefaultDevMode registry updated (60x50mm)'`,
+                        `    }`,
+                        `  }`,
+                        `} catch { Write-Host ('  [!] DEVMODE config failed: ' + $_.Exception.Message) }`,
+                        ``,
+                        `# 3) Set PrinterDriverData registry (Zebra-specific driver config)`,
+                        `try {`,
+                        `  $rp2 = 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Print\\Printers\\' + $printer_name + '\\PrinterDriverData'`,
+                        `  if (Test-Path $rp2) {`,
+                        `    # Set paper size fields used by Zebra/ZDesigner drivers`,
+                        `    Set-ItemProperty -Path $rp2 -Name 'PaperSize' -Value 256 -ErrorAction SilentlyContinue`,
+                        `    Set-ItemProperty -Path $rp2 -Name 'PaperWidth' -Value $dw -ErrorAction SilentlyContinue`,
+                        `    Set-ItemProperty -Path $rp2 -Name 'PaperLength' -Value $dh -ErrorAction SilentlyContinue`,
+                        `    # Also try alternate field names used by some driver versions`,
+                        `    Set-ItemProperty -Path $rp2 -Name 'paperlen' -Value $dh -ErrorAction SilentlyContinue`,
+                        `    Set-ItemProperty -Path $rp2 -Name 'paperwid' -Value $dw -ErrorAction SilentlyContinue`,
+                        `    Write-Host '  [OK] PrinterDriverData registry updated (60x50mm)'`,
+                        `  }`,
+                        `} catch { Write-Host ('  [!] PrinterDriverData config failed: ' + $_.Exception.Message) }`,
+                        ``,
+                        `# 4) Restart print spooler to force re-read of all settings`,
+                        `try {`,
+                        `  Write-Host '  [*] Restarting print spooler...'`,
+                        `  Stop-Service -Name Spooler -Force -ErrorAction SilentlyContinue`,
+                        `  Start-Sleep -Seconds 2`,
+                        `  Start-Service -Name Spooler -ErrorAction SilentlyContinue`,
+                        `  Write-Host '  [OK] Print spooler restarted'`,
+                        `} catch { Write-Host ('  [!] Spooler restart failed: ' + $_.Exception.Message) }`,
+                    ].join('\\n');
                     const psBase64 = Buffer.from(psScript, 'utf16le').toString('base64');
                     return [
                         'echo  [3/5] Konfigurasi ukuran label (60x50mm)...',
                         `powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${psBase64}`,
+                        'echo.',
+                        'echo  JIKA MASIH ZOOM, atur manual:',
+                        'echo    Devices and Printers ^> kanan klik printer ^> Printing Preferences',
+                        'echo    ^> Tab Advanced ^> Paper Size ^> Custom: 60mm x 50mm',
                     ];
                 })(),
                 '',
