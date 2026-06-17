@@ -17,6 +17,7 @@ import * as net from 'net';
 import * as http from 'http';
 import { logger } from '../utils/logger.js';
 import { ipp } from '../ipp-import.js';
+import { scaleZpl, isZpl } from '../utils/zpl-scaler.js';
 
 const IPP_PORT = parseInt(process.env.IPP_PORT || '631');
 const IPP_HOST = process.env.IPP_HOST || '0.0.0.0';
@@ -242,8 +243,29 @@ export class IPPServer {
             }
 
             const fileName = `raw-${Date.now()}`;
-            const base64Data = data.toString('base64');
-            logger.info(`[RAW] :${listenPort} ${peer} → printer=${printer.name} (id=${printer.id}, client=${printer.client_id}) bytes=${data.length}`);
+            let printData = data;
+
+            // ── ZPL Scale Compensation (RAW TCP path) ──────────────────
+            // The Windows driver may send ZPL with coordinates sized for
+            // a larger logical page than the actual label. Check the
+            // printer's config for scale_factor and scale the ZPL before
+            // forwarding to the agent.
+            try {
+                const printerConfig = printer.config
+                    ? (typeof printer.config === 'string' ? JSON.parse(printer.config) : printer.config)
+                    : {};
+                const scaleFactor: number | undefined = printerConfig?.scale_factor;
+                if (scaleFactor && scaleFactor > 0 && scaleFactor < 1 && isZpl(data)) {
+                    printData = scaleZpl(data, scaleFactor);
+                    logger.info(`[RAW] :${listenPort} ZPL scaled ${(scaleFactor * 100).toFixed(0)}%: ${data.length} → ${printData.length} bytes`);
+                }
+            } catch (scaleErr) {
+                logger.warn(`[RAW] :${listenPort} ZPL scale failed, using original: ${(scaleErr as Error).message}`);
+            }
+            // ── End ZPL scaling ────────────────────────────────────────
+
+            const base64Data = printData.toString('base64');
+            logger.info(`[RAW] :${listenPort} ${peer} → printer=${printer.name} (id=${printer.id}, client=${printer.client_id}) bytes=${printData.length}`);
 
             const [job] = await knex('print_jobs')
                 .insert({
@@ -254,7 +276,7 @@ export class IPPServer {
                     file_name: fileName,
                     file_path: 'raw-tcp',
                     file_type: 'raw',
-                    file_size: data.length,
+                    file_size: printData.length,
                     paper_size: 'Default',
                     copies: 1,
                     status: 'processing',
