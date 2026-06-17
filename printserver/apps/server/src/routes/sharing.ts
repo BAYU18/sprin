@@ -54,6 +54,7 @@ export async function setupSharingRoutes(fastify: FastifyInstance) {
                 'printers.driver',
                 'printers.type',
                 'printers.tags',
+                'printers.updated_at as printer_updated_at',
                 'clients.hostname as node_hostname',
                 'clients.ip_address as node_ip',
                 'clients.is_online as node_is_online',
@@ -62,8 +63,45 @@ export async function setupSharingRoutes(fastify: FastifyInstance) {
             .orderBy('clients.hostname')
             .orderBy('printers.name');
 
-        const printersWithStatus = printers.map((p: any) => {
-            const nodeOnline = p.node_is_online && p.node_last_seen && (now - new Date(p.node_last_seen).getTime()) < STALE_MS;
+        // ── Nodes without printers (orphan nodes) ──────────────────────
+        const printerClientIds = printers.map((p: any) => p.client_id).filter(Boolean);
+        const orphanNodesQuery = knex('clients')
+            .select(
+                'clients.id as client_id',
+                'clients.hostname as node_hostname',
+                'clients.ip_address as node_ip',
+                'clients.is_online as node_is_online',
+                'clients.last_seen as node_last_seen'
+            )
+            .orderBy('clients.hostname');
+
+        if (printerClientIds.length > 0) {
+            orphanNodesQuery.whereNotIn('clients.id', printerClientIds);
+        }
+        const orphanNodes = await orphanNodesQuery;
+
+        const orphanPrinters = orphanNodes.map((n: any) => ({
+            id: -(n.client_id),
+            name: `${n.node_hostname} (tanpa printer)`,
+            status: 'no_printer',
+            raw_port: null,
+            driver: null,
+            type: 'placeholder',
+            tags: [],
+            node_hostname: n.node_hostname || 'Unknown',
+            node_ip: n.node_ip,
+            node_online: n.node_is_online && n.node_last_seen && (now - new Date(n.node_last_seen).getTime()) < STALE_MS,
+            node_last_seen: n.node_last_seen || null,
+            printer_updated_at: null,
+            has_bat: false,
+        }));
+
+        const allPrinters = [...printers, ...orphanPrinters];
+
+        const printersWithStatus = allPrinters.map((p: any) => {
+            const nodeOnline = p.node_online !== undefined
+                ? p.node_online
+                : (p.node_is_online && p.node_last_seen && (now - new Date(p.node_last_seen).getTime()) < STALE_MS);
             return {
                 id: p.id,
                 name: p.name,
@@ -75,6 +113,8 @@ export async function setupSharingRoutes(fastify: FastifyInstance) {
                 node_hostname: p.node_hostname || 'Unassigned',
                 node_ip: p.node_ip,
                 node_online: nodeOnline,
+                node_last_seen: p.node_last_seen || null,
+                printer_updated_at: p.printer_updated_at || null,
                 has_bat: !!p.raw_port,
             };
         });

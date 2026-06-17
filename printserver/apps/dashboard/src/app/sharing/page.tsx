@@ -24,7 +24,10 @@ interface Printer {
   node_hostname: string;
   node_ip: string;
   node_online: boolean;
+  node_last_seen: string | null;
+  printer_updated_at: string | null;
   has_bat: boolean;
+  is_node_only?: boolean;
 }
 
 interface Stats {
@@ -53,6 +56,8 @@ export default function SharingPage() {
   const [nodeDropdownOpen, setNodeDropdownOpen] = useState(false);
   const nodeRef = useRef<HTMLDivElement>(null);
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [nodeStatusFilter, setNodeStatusFilter] = useState<string>('all');
+  const [copiedIp, setCopiedIp] = useState<string | null>(null);
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
 
   useEffect(() => {
@@ -136,9 +141,12 @@ export default function SharingPage() {
       const matchNode = selectedNode === 'all' || p.node_hostname === selectedNode;
       const effectiveStatus = !p.node_online ? 'offline' : p.status;
       const matchStatus = statusFilter === 'all' || effectiveStatus === statusFilter;
-      return matchSearch && matchNode && matchStatus;
+      const matchNodeStatus = nodeStatusFilter === 'all'
+        || (nodeStatusFilter === 'online' && p.node_online)
+        || (nodeStatusFilter === 'offline' && !p.node_online);
+      return matchSearch && matchNode && matchStatus && matchNodeStatus;
     });
-  }, [data, search, selectedNode, statusFilter]);
+  }, [data, search, selectedNode, statusFilter, nodeStatusFilter]);
 
   const getStatusColor = (status: string, nodeOnline: boolean) => {
     if (!nodeOnline) return 'var(--accent-red)';
@@ -163,6 +171,13 @@ export default function SharingPage() {
     if (diff < 3600000) return `${Math.floor(diff / 60000)}m lalu`;
     if (diff < 86400000) return `${Math.floor(diff / 3600000)}j lalu`;
     return d.toLocaleDateString('id-ID');
+  };
+
+  const copyIp = (ip: string) => {
+    if (!ip) return;
+    navigator.clipboard.writeText(ip);
+    setCopiedIp(ip);
+    setTimeout(() => setCopiedIp(null), 1500);
   };
 
   return (
@@ -331,7 +346,7 @@ export default function SharingPage() {
               gap: '10px',
               marginBottom: '20px',
             }}>
-              {/* Row 1: Search - full width, large */}
+              {/* Row 1: Search */}
               <input
                 type="text"
                 placeholder="🔍 Cari printer..."
@@ -348,90 +363,107 @@ export default function SharingPage() {
                   outline: 'none',
                 }}
               />
-              {/* Row 2: Node + Status dropdowns - side by side */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-                {/* Node Search Dropdown */}
-                <div ref={nodeRef} style={{ position: 'relative' }}>
-                  <input
-                    type="text"
-                    placeholder="🖥️ Cari node..."
-                    value={nodeDropdownOpen ? nodeSearch : (selectedNode === 'all' ? '' : selectedNode)}
-                    onFocus={() => { setNodeDropdownOpen(true); setNodeSearch(''); }}
-                    onChange={(e) => { setNodeSearch(e.target.value); if (!nodeDropdownOpen) setNodeDropdownOpen(true); }}
-                    style={{
-                      width: '100%',
-                      background: 'var(--bg-card)',
-                      border: '1px solid var(--border)',
-                      borderRadius: '8px',
-                      padding: '10px 12px',
-                      color: 'var(--text-primary)',
-                      fontSize: '13px',
-                      outline: 'none',
-                      cursor: 'text',
-                      minWidth: 0,
-                    }}
-                  />
-                  {nodeDropdownOpen && (
-                    <div style={{
-                      position: 'absolute',
-                      top: '100%',
-                      left: 0,
-                      right: 0,
-                      marginTop: '4px',
-                      background: 'var(--bg-card)',
-                      border: '1px solid var(--border)',
-                      borderRadius: '8px',
-                      maxHeight: '240px',
-                      overflowY: 'auto',
-                      zIndex: 100,
-                      boxShadow: '0 8px 24px rgba(0,0,0,0.3)',
-                    }}>
+              {/* Row 2: Node Search Dropdown */}
+              <div ref={nodeRef} style={{ position: 'relative' }}>
+                <input
+                  type="text"
+                  placeholder="🖥️ Cari node..."
+                  value={nodeDropdownOpen ? nodeSearch : (selectedNode === 'all' ? '' : selectedNode)}
+                  onFocus={() => { setNodeDropdownOpen(true); setNodeSearch(''); }}
+                  onChange={(e) => { setNodeSearch(e.target.value); if (!nodeDropdownOpen) setNodeDropdownOpen(true); }}
+                  style={{
+                    width: '100%',
+                    background: 'var(--bg-card)',
+                    border: '1px solid var(--border)',
+                    borderRadius: '8px',
+                    padding: '10px 14px',
+                    color: 'var(--text-primary)',
+                    fontSize: '13px',
+                    outline: 'none',
+                    cursor: 'text',
+                  }}
+                />
+                {nodeDropdownOpen && (
+                  <div style={{
+                    position: 'absolute',
+                    top: '100%',
+                    left: 0,
+                    right: 0,
+                    marginTop: '4px',
+                    background: 'var(--bg-card)',
+                    border: '1px solid var(--border)',
+                    borderRadius: '8px',
+                    maxHeight: '240px',
+                    overflowY: 'auto',
+                    zIndex: 100,
+                    boxShadow: '0 8px 24px rgba(0,0,0,0.3)',
+                  }}>
+                    <div
+                      onClick={() => { setSelectedNode('all'); setNodeSearch(''); setNodeDropdownOpen(false); }}
+                      style={{
+                        padding: '10px 14px',
+                        cursor: 'pointer',
+                        fontSize: '14px',
+                        fontWeight: selectedNode === 'all' ? '600' : '400',
+                        color: selectedNode === 'all' ? 'var(--accent-cyan)' : 'var(--text-primary)',
+                        background: selectedNode === 'all' ? 'var(--bg-hover)' : 'transparent',
+                        borderBottom: '1px solid var(--border)',
+                      }}
+                    >
+                      Semua Node
+                    </div>
+                    {filteredNodes.map(n => (
                       <div
-                        onClick={() => { setSelectedNode('all'); setNodeSearch(''); setNodeDropdownOpen(false); }}
+                        key={n}
+                        onClick={() => { setSelectedNode(n); setNodeSearch(''); setNodeDropdownOpen(false); }}
                         style={{
                           padding: '10px 14px',
                           cursor: 'pointer',
                           fontSize: '14px',
-                          fontWeight: selectedNode === 'all' ? '600' : '400',
-                          color: selectedNode === 'all' ? 'var(--accent-cyan)' : 'var(--text-primary)',
-                          background: selectedNode === 'all' ? 'var(--bg-hover)' : 'transparent',
-                          borderBottom: '1px solid var(--border)',
+                          fontWeight: selectedNode === n ? '600' : '400',
+                          color: selectedNode === n ? 'var(--accent-cyan)' : 'var(--text-primary)',
+                          background: selectedNode === n ? 'var(--bg-hover)' : 'transparent',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '8px',
                         }}
                       >
-                        Semua Node
+                        <span style={{
+                          width: '8px', height: '8px', borderRadius: '50%', flexShrink: 0,
+                          background: nodeOnlineMap.get(n) ? 'var(--accent-green)' : 'var(--accent-red)',
+                        }} />
+                        {n}
                       </div>
-                      {filteredNodes.map(n => (
-                        <div
-                          key={n}
-                          onClick={() => { setSelectedNode(n); setNodeSearch(''); setNodeDropdownOpen(false); }}
-                          style={{
-                            padding: '10px 14px',
-                            cursor: 'pointer',
-                            fontSize: '14px',
-                            fontWeight: selectedNode === n ? '600' : '400',
-                            color: selectedNode === n ? 'var(--accent-cyan)' : 'var(--text-primary)',
-                            background: selectedNode === n ? 'var(--bg-hover)' : 'transparent',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '8px',
-                          }}
-                        >
-                          <span style={{
-                            width: '8px', height: '8px', borderRadius: '50%', flexShrink: 0,
-                            background: nodeOnlineMap.get(n) ? 'var(--accent-green)' : 'var(--accent-red)',
-                          }} />
-                          {n}
-                        </div>
-                      ))}
-                      {filteredNodes.length === 0 && (
-                        <div style={{ padding: '12px 14px', fontSize: '13px', color: 'var(--text-muted)', textAlign: 'center' }}>
-                          Tidak ditemukan
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-                {/* Status filter */}
+                    ))}
+                    {filteredNodes.length === 0 && (
+                      <div style={{ padding: '12px 14px', fontSize: '13px', color: 'var(--text-muted)', textAlign: 'center' }}>
+                        Tidak ditemukan
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+              {/* Row 3: Node Status + Printer Status */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                <select
+                  value={nodeStatusFilter}
+                  onChange={(e) => setNodeStatusFilter(e.target.value)}
+                  style={{
+                    width: '100%',
+                    background: 'var(--bg-card)',
+                    border: '1px solid var(--border)',
+                    borderRadius: '8px',
+                    padding: '10px 12px',
+                    color: 'var(--text-primary)',
+                    fontSize: '13px',
+                    outline: 'none',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <option value="all">🖥️ Semua Node</option>
+                  <option value="online">🟢 Node Online</option>
+                  <option value="offline">🔴 Node Offline</option>
+                </select>
                 <select
                   value={statusFilter}
                   onChange={(e) => setStatusFilter(e.target.value)}
@@ -445,15 +477,14 @@ export default function SharingPage() {
                     fontSize: '13px',
                     outline: 'none',
                     cursor: 'pointer',
-                    minWidth: 0,
                   }}
                 >
-                  <option value="all">Semua Status</option>
-                  <option value="online">🟢 Online</option>
-                  <option value="offline">🔴 Offline</option>
+                  <option value="all">🖨️ Semua Printer</option>
+                  <option value="online">🟢 Printer Online</option>
+                  <option value="offline">🔴 Printer Offline</option>
                 </select>
               </div>
-              {/* Row 3: Install Agent button - full width */}
+              {/* Row 4: Install Agent button */}
               <a
                 href="/downloads/install-agent.bat"
                 download
@@ -490,13 +521,19 @@ export default function SharingPage() {
               gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))',
               gap: '16px',
             }}>
-              {filteredPrinters.map(printer => (
+              {filteredPrinters.map(printer => {
+                const cardBorder = !printer.node_online
+                  ? 'var(--accent-red)'
+                  : printer.status === 'online' ? 'var(--accent-green)' : 'var(--accent-amber)';
+                return (
                 <div key={printer.id} style={{
                   background: 'var(--bg-card)',
-                  border: '1px solid var(--border)',
+                  border: `1px solid ${cardBorder}33`,
+                  borderLeft: `3px solid ${cardBorder}`,
                   borderRadius: '12px',
                   padding: '16px',
                   transition: 'border-color 0.2s',
+                  opacity: printer.node_online ? 1 : 0.7,
                 }}
                 onMouseEnter={(e) => (e.currentTarget.style.borderColor = 'var(--accent-cyan)')}
                 onMouseLeave={(e) => (e.currentTarget.style.borderColor = 'var(--border)')}
@@ -507,8 +544,8 @@ export default function SharingPage() {
                       <div style={{ fontSize: '15px', fontWeight: '600', marginBottom: '4px' }}>
                         {printer.name}
                       </div>
-                      <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                        {printer.driver || 'No driver'}
+                      <div style={{ fontSize: '12px', color: printer.type === 'placeholder' ? 'var(--accent-amber)' : 'var(--text-muted)' }}>
+                        {printer.type === 'placeholder' ? '⚠️ Node tanpa printer' : (printer.driver || 'No driver')}
                       </div>
                     </div>
                     <div style={{
@@ -536,14 +573,46 @@ export default function SharingPage() {
                       <span style={{ color: 'var(--text-muted)' }}>Node</span>
                       <span style={{ fontWeight: '500' }}>{printer.node_hostname}</span>
                     </div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px', alignItems: 'center' }}>
                       <span style={{ color: 'var(--text-muted)' }}>IP</span>
-                      <span style={{ fontFamily: 'monospace' }}>{printer.node_ip || '-'}</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <span style={{ fontFamily: 'monospace' }}>{printer.node_ip || '-'}</span>
+                        {printer.node_ip && (
+                          <button
+                            onClick={() => copyIp(printer.node_ip)}
+                            style={{
+                              background: 'none',
+                              border: '1px solid var(--border)',
+                              borderRadius: '4px',
+                              padding: '2px 6px',
+                              cursor: 'pointer',
+                              fontSize: '11px',
+                              color: copiedIp === printer.node_ip ? 'var(--accent-green)' : 'var(--text-muted)',
+                              transition: 'color 0.2s',
+                            }}
+                            title="Copy IP"
+                          >
+                            {copiedIp === printer.node_ip ? '✓' : '📋'}
+                          </button>
+                        )}
+                      </div>
                     </div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                      <span style={{ color: 'var(--text-muted)' }}>Port</span>
-                      <span style={{ fontFamily: 'monospace' }}>{printer.raw_port || '-'}</span>
-                    </div>
+                    {printer.node_last_seen && (
+                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '2px' }}>
+                        <span style={{ color: 'var(--text-muted)' }}>🖥️ Node</span>
+                        <span>{formatTime(printer.node_last_seen)}</span>
+                      </div>
+                    )}
+                    {printer.printer_updated_at && (
+                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <span style={{ color: 'var(--text-muted)' }}>
+                          {printer.status === 'online' ? '🖨️ Aktif' : '🖨️ Status'}
+                        </span>
+                        <span style={{ color: printer.status === 'online' ? 'var(--accent-green)' : 'var(--text-muted)' }}>
+                          {formatTime(printer.printer_updated_at)}
+                        </span>
+                      </div>
+                    )}
                   </div>
 
                   {/* Tags */}
@@ -588,7 +657,7 @@ export default function SharingPage() {
                     </a>
                   )}
                 </div>
-              ))}
+              )})}
             </div>
 
             {filteredPrinters.length === 0 && (
