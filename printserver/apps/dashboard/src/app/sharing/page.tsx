@@ -38,6 +38,9 @@ interface Stats {
   active_printers: number;
   inactive_printers: number;
   total_pages: number;
+  daily_pages: number;
+  weekly_pages: number;
+  monthly_pages: number;
 }
 
 interface Data {
@@ -58,6 +61,7 @@ export default function SharingPage() {
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [nodeStatusFilter, setNodeStatusFilter] = useState<string>('all');
   const [copiedIp, setCopiedIp] = useState<string | null>(null);
+  const [pollProgress, setPollProgress] = useState(0);
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
 
   useEffect(() => {
@@ -125,6 +129,20 @@ export default function SharingPage() {
     const interval = setInterval(fetchData, 30000); // refresh every 30s
     return () => clearInterval(interval);
   }, []);
+
+  // Polling progress animation
+  useEffect(() => {
+    setPollProgress(0);
+    const start = Date.now();
+    const duration = 30000;
+    const tick = () => {
+      const elapsed = Date.now() - start;
+      setPollProgress(Math.min((elapsed / duration) * 100, 100));
+      if (elapsed < duration) requestAnimationFrame(tick);
+    };
+    const raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [data]);
 
   const nodeNames = useMemo(() => {
     if (!data) return [];
@@ -246,6 +264,32 @@ export default function SharingPage() {
         </button>
       </header>
 
+      {/* Polling progress bar */}
+      {data && (
+        <div style={{
+          maxWidth: '1200px',
+          margin: '0 auto',
+          padding: '0 24px',
+        }}>
+          <div style={{
+            height: '3px',
+            background: 'var(--border)',
+            borderRadius: '0 0 4px 4px',
+            overflow: 'hidden',
+          }}>
+            <div style={{
+              height: '100%',
+              width: `${pollProgress}%`,
+              background: loading
+                ? 'var(--accent-amber)'
+                : 'linear-gradient(90deg, var(--accent-cyan), var(--accent-green))',
+              borderRadius: '0 0 4px 4px',
+              transition: loading ? 'none' : 'width 0.3s ease',
+            }} />
+          </div>
+        </div>
+      )}
+
       <main style={{ maxWidth: '1200px', margin: '0 auto', padding: '24px' }}>
         {loading && (
           <div style={{ textAlign: 'center', padding: '60px', color: 'var(--text-muted)' }}>
@@ -308,29 +352,45 @@ export default function SharingPage() {
               ))}
             </div>
 
-            {/* Total Halaman - full width card */}
+            {/* Total Halaman - single card, stacked */}
             <div style={{
               background: 'var(--bg-card)',
               border: '1px solid var(--border)',
-              borderLeft: '3px solid var(--accent-cyan)',
               borderRadius: '12px',
-              padding: '20px 24px',
+              padding: '16px 20px',
               marginBottom: '24px',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '14px',
               position: 'relative',
             }}>
-              <div style={{
-                width: '44px', height: '44px', borderRadius: '10px',
-                background: 'rgba(0, 212, 255, 0.1)',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                fontSize: '22px', flexShrink: 0,
-              }}>📄</div>
-              <div>
-                <div style={{ fontSize: '32px', fontWeight: '700', color: 'var(--accent-cyan)', lineHeight: 1 }}>
-                  {data.stats.total_pages}
-                </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '14px' }}>
+                <span style={{ fontSize: '18px' }}>📄</span>
+                <span style={{ fontSize: '14px', fontWeight: '600' }}>Total Halaman</span>
+                <span style={{ fontSize: '13px', color: 'var(--text-muted)', marginLeft: '4px' }}>
+                  {data.stats.total_pages} keseluruhan
+                </span>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                {[
+                  { label: 'Hari Ini', value: data.stats.daily_pages, color: 'var(--accent-green)', icon: '☀️' },
+                  { label: 'Minggu Ini', value: data.stats.weekly_pages, color: 'var(--accent-cyan)', icon: '🌤️' },
+                  { label: 'Bulan Ini', value: data.stats.monthly_pages, color: 'var(--accent-purple, #a78bfa)', icon: '🌙' },
+                ].map((seg, i) => (
+                  <div key={i} style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    background: 'var(--bg-hover)',
+                    borderRadius: '8px',
+                    padding: '10px 14px',
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                      <span style={{ fontSize: '16px' }}>{seg.icon}</span>
+                      <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>{seg.label}</span>
+                    </div>
+                    <span style={{ fontSize: '16px', fontWeight: '700', color: seg.color }}>
+                      {seg.value}
+                    </span>
+                  </div>
+                ))}
               </div>
               <div style={{
                 position: 'absolute', top: '14px', right: '14px',

@@ -129,6 +129,18 @@ export async function setupSharingRoutes(fastify: FastifyInstance) {
             .first();
         const totalPages = Number(pagesResult?.total_pages) || 0;
 
+        const nowDate = new Date();
+        const nowMs = nowDate.getTime();
+        const dayStart = new Date(nowMs - (nowDate.getHours() * 3600000 + nowDate.getMinutes() * 60000 + nowDate.getSeconds() * 1000));
+        const weekStart = new Date(nowMs - ((nowDate.getDay()) * 86400000 + nowDate.getHours() * 3600000 + nowDate.getMinutes() * 60000 + nowDate.getSeconds() * 1000));
+        const monthStart = new Date(nowDate.getFullYear(), nowDate.getMonth(), 1);
+
+        const [dailyResult, weeklyResult, monthlyResult] = await Promise.all([
+            knex('print_jobs').where('status', 'completed').where('created_at', '>=', dayStart.toISOString()).sum('pages as p').first(),
+            knex('print_jobs').where('status', 'completed').where('created_at', '>=', weekStart.toISOString()).sum('pages as p').first(),
+            knex('print_jobs').where('status', 'completed').where('created_at', '>=', monthStart.toISOString()).sum('pages as p').first(),
+        ]);
+
         // ── Response ───────────────────────────────────────────────────
         return {
             nodes: nodesWithStatus,
@@ -140,6 +152,9 @@ export async function setupSharingRoutes(fastify: FastifyInstance) {
                 active_printers: activePrinters,
                 inactive_printers: inactivePrinters,
                 total_pages: totalPages,
+                daily_pages: Number(dailyResult?.p) || 0,
+                weekly_pages: Number(weeklyResult?.p) || 0,
+                monthly_pages: Number(monthlyResult?.p) || 0,
             },
             printers: printersWithStatus,
         };
