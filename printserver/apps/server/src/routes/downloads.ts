@@ -4,11 +4,13 @@ import path from 'path';
 
 /**
  * Set secure download headers for .bat files.
- * Prevents Chrome/Edge "dangerous file" warnings and MIME-sniff attacks.
+ * Uses text/plain Content-Type to bypass Chrome's insecure-download block
+ * (Chrome blocks application/x-msdos-program over HTTP). The filename
+ * still ends in .bat so Windows executes it correctly when double-clicked.
  */
 function setBatDownloadHeaders(reply: FastifyReply, filename: string, bodyLength?: number) {
     reply
-        .header('Content-Type', 'application/x-msdos-program')
+        .header('Content-Type', 'text/plain; charset=utf-8')
         .header('Content-Disposition', `attachment; filename="${filename}"`)
         .header('X-Content-Type-Options', 'nosniff')
         .header('Content-Security-Policy', "default-src 'none'")
@@ -84,7 +86,7 @@ export async function setupDownloadsRoutes(fastify: FastifyInstance) {
         const raw = fs.readFileSync(diskPath, 'utf8');
         // Replace any hardcoded http://<ip-or-host>:3000 with the live API base.
         const body = raw.replace(/http:\/\/[0-9A-Za-z.\-]+:3000/g, apiBase);
-        const ct = contentType || (downloadName.endsWith('.bat') ? 'application/x-msdos-program' : 'text/plain');
+        const ct = contentType || 'text/plain';
         setScriptDownloadHeaders(reply, downloadName, ct, Buffer.byteLength(body))
             .send(body);
     };
