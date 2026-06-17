@@ -290,11 +290,14 @@ export async function setupClientsRoutes(fastify: FastifyInstance) {
                 );
             };
 
-            // Normalize printers to objects and filter network shares
+            // Normalize printers to objects and filter network shares.
+            // Preserve per-printer `status` from the agent heartbeat so the
+            // server respects each printer's actual state (online/offline)
+            // instead of forcing all printers to match the node-level status.
             const filteredPrinters = printers
                 .map((p: any) => {
-                    if (typeof p === 'string') return { name: p, port: 'UNKNOWN' };
-                    return { name: p?.name || 'UNKNOWN', port: p?.port || 'UNKNOWN' };
+                    if (typeof p === 'string') return { name: p, port: 'UNKNOWN', status: 'online' };
+                    return { name: p?.name || 'UNKNOWN', port: p?.port || 'UNKNOWN', status: p?.status || 'online' };
                 })
                 .filter((p: any) => !isFiltered(p));
 
@@ -341,9 +344,17 @@ export async function setupClientsRoutes(fastify: FastifyInstance) {
                         existingConfig.restored_at = new Date().toISOString();
                     }
 
+                    // BUG FIX: use per-printer status from agent heartbeat when
+                    // available. Previously this used `status` (the node-level
+                    // field) which forced ALL printers on an online node to
+                    // 'online' — even when the agent explicitly reported a
+                    // printer as 'offline' (e.g. EPSON LX-310 ESC/P on IT-99
+                    // physically disconnected). Fallback to node status only
+                    // when the agent doesn't send per-printer status.
+                    const printerStatus = printer.status || (status === 'online' ? 'online' : 'offline');
                     const updatePayload: any = {
                         port: printer.port,
-                        status: status === 'online' ? 'online' : 'offline',
+                        status: printerStatus,
                         slug,
                         updated_at: new Date()
                     };
@@ -385,6 +396,9 @@ export async function setupClientsRoutes(fastify: FastifyInstance) {
                     const rawPortRow = await fastify.knex('printers').max('raw_port as maxPort').first();
                     const nextRawPort = Math.max(9100, (Number(rawPortRow?.maxPort) || 9099) + 1);
 
+                    // BUG FIX: use per-printer status from agent (same as
+                    // existing-printer path above).
+                    const newPrinterStatus = printer.status || (status === 'online' ? 'online' : 'offline');
                     const [newId] = await fastify.knex('printers')
                         .insert({
                             name: trimmedName,
@@ -392,7 +406,7 @@ export async function setupClientsRoutes(fastify: FastifyInstance) {
                             port: printer.port || 'NODE',
                             type: 'network',
                             is_shared: true,
-                            status: status === 'online' ? 'online' : 'offline',
+                            status: newPrinterStatus,
                             client_id: id,
                             slug,
                             raw_port: nextRawPort,
@@ -408,7 +422,7 @@ export async function setupClientsRoutes(fastify: FastifyInstance) {
                         port: printer.port || 'NODE',
                         type: 'network',
                         is_shared: true,
-                        status: status === 'online' ? 'online' : 'offline',
+                        status: newPrinterStatus,
                         client_id: id,
                         slug,
                         created_at: new Date(),
