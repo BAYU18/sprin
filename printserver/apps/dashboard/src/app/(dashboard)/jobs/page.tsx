@@ -390,7 +390,7 @@ export default function JobsPage() {
                 background: 'rgba(0,212,255,0.04)',
                 borderBottom: '1px solid var(--border)',
               }}>
-                {['Job ID', 'File Name', 'User', 'Printer', 'Node', 'Pages', 'Status', 'Created', 'Actions'].map((h) => (
+                {['Job ID', 'Printer', 'Node', 'Pages', 'Status', 'Created', 'Actions'].map((h) => (
                   <th key={h} style={{
                     padding: '11px 16px',
                     textAlign: 'left',
@@ -412,7 +412,7 @@ export default function JobsPage() {
                 /* Skeleton rows */
                 Array.from({ length: 5 }).map((_, i) => (
                   <tr key={i} style={{ borderBottom: '1px solid var(--border)' }}>
-                    {Array.from({ length: 9 }).map((_, j) => (
+                    {Array.from({ length: 7 }).map((_, j) => (
                       <td key={j} style={{ padding: '14px 16px' }}>
                         <div className="skeleton-pulse" style={{ height: '14px', borderRadius: '4px', width: j === 1 ? '140px' : '70px' }} />
                       </td>
@@ -421,7 +421,7 @@ export default function JobsPage() {
                 ))
               ) : jobs.length === 0 ? (
                 <tr>
-                  <td colSpan={9}>
+                  <td colSpan={7}>
                     <div className="empty-state" style={{ margin: '16px', borderRadius: '8px' }}>
                       <FileText size={32} style={{ margin: '0 auto 8px', color: 'var(--text-muted)' }} />
                       No jobs found
@@ -482,42 +482,15 @@ export default function JobsPage() {
                         </Link>
                       </td>
 
-                      {/* File name */}
-                      <td style={{
-                        padding: '13px 16px',
-                        maxWidth: '200px',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                        fontSize: '14px',
-                        color: 'var(--text-primary)',
-                      }}>
-                        {job.file_name || job.job_name || '—'}
-                      </td>
-
-                      {/* User */}
-                      <td style={{ padding: '13px 16px', fontSize: '14px', color: 'var(--text-primary)' }}>
-                        {job.username || 'Unknown'}
-                      </td>
-
                       {/* Printer */}
                       <td style={{ padding: '13px 16px', fontSize: '13px', color: 'var(--text-muted)' }}>
                         {job.printer_name || 'N/A'}
                       </td>
 
                       {/* Node */}
-                      <td style={{ padding: '13px 16px', fontSize: '12px', color: 'var(--text-muted)' }}>
+                      <td style={{ padding: '13px 16px', fontSize: '14px', color: 'var(--text-primary)', fontWeight: 600 }}>
                         {job.client_hostname ? (
-                          <span style={{
-                            fontFamily: "'Share Tech Mono', monospace",
-                            fontSize: '11px',
-                            background: 'rgba(0,212,255,0.06)',
-                            border: '1px solid rgba(0,212,255,0.15)',
-                            borderRadius: '4px',
-                            padding: '2px 6px',
-                            color: 'var(--accent-cyan)',
-                            whiteSpace: 'nowrap',
-                          }}>
+                          <span style={{ whiteSpace: 'nowrap' }}>
                             {job.client_hostname}
                           </span>
                         ) : '—'}
