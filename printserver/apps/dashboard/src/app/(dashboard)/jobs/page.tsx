@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import { jobs as jobsApi, clients as clientsApi } from '@/lib/api';
 import { on, off } from '@/hooks/useSocket';
@@ -87,6 +87,9 @@ export default function JobsPage() {
   const [search, setSearch] = useState('');
   const [nodeFilter, setNodeFilter] = useState('');
   const [nodes, setNodes] = useState<any[]>([]);
+  const [nodeDropdownOpen, setNodeDropdownOpen] = useState(false);
+  const [nodeSearch, setNodeSearch] = useState('');
+  const nodeDropdownRef = useRef<HTMLDivElement>(null);
   // TIER-2 #4: mobile filter drawer state
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [queueStats, setQueueStats] = useState<any>(null);
@@ -130,6 +133,18 @@ export default function JobsPage() {
       .then(res => setNodes(Array.isArray(res.data) ? res.data : res.data.clients || []))
       .catch(() => {});
   }, []);
+
+  // Close node dropdown on outside click
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (nodeDropdownRef.current && !nodeDropdownRef.current.contains(e.target as Node)) {
+        setNodeDropdownOpen(false);
+        setNodeSearch('');
+      }
+    };
+    if (nodeDropdownOpen) document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [nodeDropdownOpen]);
 
   // Socket real-time updates
   useEffect(() => {
@@ -337,27 +352,110 @@ export default function JobsPage() {
             </select>
           </div>
 
-          {/* Node filter */}
-          <div style={{ position: 'relative', minWidth: '150px' }}>
-            <Monitor
-              size={14}
-              style={{
-                position: 'absolute', left: '12px', top: '50%',
-                transform: 'translateY(-50%)', color: 'var(--text-muted)',
-                pointerEvents: 'none',
-              }}
-            />
-            <select
-              value={nodeFilter}
-              onChange={(e) => { setPage(1); setNodeFilter(e.target.value); }}
+          {/* Node filter — searchable dropdown */}
+          <div style={{ position: 'relative', minWidth: '180px' }} ref={nodeDropdownRef}>
+            <div
+              onClick={() => setNodeDropdownOpen(!nodeDropdownOpen)}
               className="input"
-              style={{ paddingLeft: '34px', appearance: 'none', cursor: 'pointer' }}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 6,
+                paddingLeft: '34px', cursor: 'pointer', userSelect: 'none',
+                textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap',
+              }}
             >
-              <option value="">All Nodes</option>
-              {nodes.map((n: any) => (
-                <option key={n.id} value={n.id}>{n.hostname}</option>
-              ))}
-            </select>
+              <Monitor
+                size={14}
+                style={{
+                  position: 'absolute', left: '12px', top: '50%',
+                  transform: 'translateY(-50%)', color: 'var(--text-muted)',
+                  pointerEvents: 'none',
+                }}
+              />
+              {nodeFilter
+                ? (nodes.find((n: any) => String(n.id) === nodeFilter)?.hostname || 'Unknown')
+                : 'All Nodes'}
+              <span style={{ marginLeft: 'auto', fontSize: 10, color: 'var(--text-muted)' }}>▾</span>
+            </div>
+            {nodeDropdownOpen && (
+              <div style={{
+                position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 100,
+                background: 'var(--bg-card)', border: '1px solid var(--accent-cyan)',
+                borderRadius: 8, marginTop: 4, maxHeight: 240, overflow: 'hidden',
+                boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
+              }}>
+                <input
+                  autoFocus
+                  type="text"
+                  value={nodeSearch}
+                  onChange={(e) => setNodeSearch(e.target.value)}
+                  placeholder="Search nodes..."
+                  className="input"
+                  style={{
+                    width: '100%', boxSizing: 'border-box', border: 'none',
+                    borderBottom: '1px solid var(--border)', borderRadius: '8px 8px 0 0',
+                    background: 'transparent', paddingLeft: 34,
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Escape') setNodeDropdownOpen(false);
+                    if (e.key === 'Enter') {
+                      const filtered = nodes.filter((n: any) =>
+                        (n.hostname || '').toLowerCase().includes(nodeSearch.toLowerCase())
+                      );
+                      if (filtered.length === 1) {
+                        setPage(1);
+                        setNodeFilter(String(filtered[0].id));
+                        setNodeDropdownOpen(false);
+                        setNodeSearch('');
+                      }
+                    }
+                  }}
+                />
+                <div style={{ overflowY: 'auto', maxHeight: 200 }}>
+                  <div
+                    onClick={() => { setPage(1); setNodeFilter(''); setNodeDropdownOpen(false); setNodeSearch(''); }}
+                    style={{
+                      padding: '8px 12px', cursor: 'pointer', fontSize: 13,
+                      fontFamily: "'Rajdhani', sans-serif", fontWeight: 600,
+                      color: !nodeFilter ? 'var(--accent-cyan)' : 'var(--text-muted)',
+                      background: !nodeFilter ? 'rgba(0,212,255,0.08)' : 'transparent',
+                      borderBottom: '1px solid var(--border)',
+                    }}
+                  >
+                    All Nodes
+                  </div>
+                  {nodes
+                    .filter((n: any) =>
+                      (n.hostname || '').toLowerCase().includes(nodeSearch.toLowerCase()) ||
+                      (n.ip_address || '').includes(nodeSearch)
+                    )
+                    .map((n: any) => (
+                      <div
+                        key={n.id}
+                        onClick={() => { setPage(1); setNodeFilter(String(n.id)); setNodeDropdownOpen(false); setNodeSearch(''); }}
+                        style={{
+                          padding: '8px 12px', cursor: 'pointer', fontSize: 13,
+                          fontFamily: "'Rajdhani', sans-serif", fontWeight: 600,
+                          color: String(n.id) === nodeFilter ? 'var(--accent-cyan)' : 'var(--text-muted)',
+                          background: String(n.id) === nodeFilter ? 'rgba(0,212,255,0.08)' : 'transparent',
+                          borderBottom: '1px solid var(--border)',
+                          display: 'flex', alignItems: 'center', gap: 8,
+                        }}
+                      >
+                        <span style={{
+                          width: 6, height: 6, borderRadius: '50%',
+                          background: n.is_online ? 'var(--accent-green)' : 'var(--accent-red)',
+                          flexShrink: 0,
+                        }} />
+                        {n.hostname}
+                        <span style={{ marginLeft: 'auto', fontSize: 10, color: 'var(--text-muted)' }}>
+                          {n.ip_address}
+                        </span>
+                      </div>
+                    ))
+                  }
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Refresh */}
