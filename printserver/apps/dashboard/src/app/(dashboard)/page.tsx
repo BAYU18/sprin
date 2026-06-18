@@ -4,7 +4,7 @@ import { useEffect, useState, useRef } from 'react';
 import { jobs as jobsApi, printers, clients, analytics as analyticsApi } from '@/lib/api';
 import { on, off, getSocket } from '@/hooks/useSocket';
 import {
-  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell,
+  XAxis, YAxis, Tooltip, ResponsiveContainer,
   AreaChart, Area
 } from 'recharts';
 import Link from 'next/link';
@@ -331,7 +331,7 @@ function ActiveNodeList({ nodes }: { nodes: any[] }) {
 export default function DashboardPage() {
   const [printerList, setPrinterList] = useState<any[]>([]);
   const [clientList, setClientList] = useState<any[]>([]);
-  const [todayJobs, setTodayJobs] = useState<any[]>([]);
+  const [todayStats, setTodayStats] = useState<any>({ total: 0, completed: 0, failed: 0, processing: 0, total_pages: 0 });
   const [volumeData, setVolumeData] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [isVisible, setIsVisible] = useState(false);
@@ -353,9 +353,13 @@ export default function DashboardPage() {
       setClientList(clientsRes.data || []);
 
       const todayData = todayRes.data || {};
-      const today = new Date().toDateString();
-      const jobsArr = Array.isArray(todayData.jobs) ? todayData.jobs : [];
-      setTodayJobs(jobsArr);
+      setTodayStats({
+        total: todayData.total || 0,
+        completed: todayData.completed || 0,
+        failed: todayData.failed || 0,
+        processing: todayData.processing || 0,
+        total_pages: todayData.total_pages || 0,
+      });
 
       // /api/analytics/volume returns an array [{date, jobs, pages}], not {jobs:[...]}
       setVolumeData(Array.isArray(volumeRes.data) ? volumeRes.data : []);
@@ -439,15 +443,11 @@ export default function DashboardPage() {
     .filter(isNodeOnline)
     .sort((a: any, b: any) => new Date(b.last_seen).getTime() - new Date(a.last_seen).getTime());
 
-  const today = new Date().toDateString();
-  const todayFiltered = todayJobs.filter((j: any) => {
-    const d = j.createdAt ? new Date(j.createdAt).toDateString() : '';
-    return d === today;
-  });
-  const completedJobs = todayFiltered.filter((j: any) => j.status === 'completed').length;
-  const pendingJobs = todayFiltered.filter((j: any) => j.status === 'pending').length;
-  const processingJobs = todayFiltered.filter((j: any) => j.status === 'processing').length;
-  const totalPages = todayFiltered.reduce((s: number, j: any) => s + (j.pages || 0), 0);
+  const todayCompleted = todayStats.completed || 0;
+  const todayFailed = todayStats.failed || 0;
+  const todayProcessing = todayStats.processing || 0;
+  const todayTotal = todayStats.total || 0;
+  const todayTotalPages = todayStats.total_pages || 0;
 
   // Chart data — fill zeros if empty
   const chartData = volumeData.length > 0 ? volumeData : Array.from({ length: 7 }, (_, i) => {
@@ -533,18 +533,18 @@ export default function DashboardPage() {
           icon={<DocumentIcon />}
           badge="Today"
           badgeColor="cyan"
-          value={todayFiltered.length}
+          value={todayTotal}
           label="Today's Jobs"
-          subtext={<><span style={{ color: 'var(--accent-green)' }}>{completedJobs}</span> completed</>}
+          subtext={<><span style={{ color: 'var(--accent-green)' }}>{todayCompleted}</span> completed</>}
           index={2}
         />
         <StatCard
           icon={<WarningIcon />}
-          badge={pendingJobs > 0 ? 'Alert' : 'Clear'}
-          badgeColor={pendingJobs > 0 ? 'amber' : 'green'}
-          value={pendingJobs}
-          label="Pending Queue"
-          subtext="jobs waiting"
+          badge={todayFailed > 0 ? 'Alert' : 'Clear'}
+          badgeColor={todayFailed > 0 ? 'amber' : 'green'}
+          value={todayFailed}
+          label="Failed Today"
+          subtext="failed jobs"
           index={3}
         />
       </div>
@@ -553,45 +553,12 @@ export default function DashboardPage() {
       {activeNodeList.length > 0 && <ActiveNodeList nodes={activeNodeList} />}
 
       {/* Charts Row */}
-      <div className="charts-row">
-        {/* Print Volume — Bar Chart */}
+      <div className="charts-row" style={{ gridTemplateColumns: '1fr' }}>
+        {/* Pages Printed — Area Chart (full width) */}
         <div className="chart-card" style={{ '--index': 0 } as React.CSSProperties}>
-          <div className="chart-title">Print Volume (7 Days)</div>
-          <ResponsiveContainer width="100%" height={200}>
-            <BarChart data={chartData} margin={{ top: 5, right: 10, left: -20, bottom: 5 }}>
-              <XAxis
-                dataKey="date"
-                tick={{ fill: 'var(--text-muted)', fontSize: 11, fontFamily: 'Share Tech Mono' }}
-                tickFormatter={(val) => new Date(val).toLocaleDateString('en', { weekday: 'short' })}
-                axisLine={{ stroke: 'var(--border)' }}
-                tickLine={false}
-              />
-              <YAxis tick={{ fill: 'var(--text-muted)', fontSize: 11 }} axisLine={false} tickLine={false} />
-              <Tooltip
-                contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--accent-cyan)', borderRadius: 8, fontFamily: 'Share Tech Mono', color: 'var(--text-primary)' }}
-                labelStyle={{ color: 'var(--text-primary)' }}
-                itemStyle={{ color: 'var(--accent-cyan)' }}
-              />
-              <Bar dataKey="jobs" radius={[4, 4, 0, 0]}>
-                {chartData.map((_, i) => (
-                  <Cell key={i} fill={`url(#barGrad)`} />
-                ))}
-              </Bar>
-              <defs>
-                <linearGradient id="barGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="var(--accent-cyan)" stopOpacity={0.9} />
-                  <stop offset="100%" stopColor="var(--accent-cyan)" stopOpacity={0.2} />
-                </linearGradient>
-              </defs>
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-
-        {/* Pages Printed — Area Chart */}
-        <div className="chart-card" style={{ '--index': 1 } as React.CSSProperties}>
           <div className="chart-title">Pages Printed (7 Days)</div>
-          <ResponsiveContainer width="100%" height={200}>
-            <AreaChart data={chartData} margin={{ top: 5, right: 10, left: -20, bottom: 5 }}>
+          <ResponsiveContainer width="100%" height={250}>
+            <AreaChart data={chartData} margin={{ top: 5, right: 20, left: -10, bottom: 5 }}>
               <defs>
                 <linearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="0%" stopColor="var(--accent-cyan)" stopOpacity={0.3} />
@@ -605,7 +572,14 @@ export default function DashboardPage() {
                 axisLine={{ stroke: 'var(--border)' }}
                 tickLine={false}
               />
-              <YAxis tick={{ fill: 'var(--text-muted)', fontSize: 11 }} axisLine={false} tickLine={false} />
+              <YAxis
+                domain={[0, 'auto']}
+                allowDataOverflow
+                tick={{ fill: 'var(--text-muted)', fontSize: 11 }}
+                axisLine={false}
+                tickLine={false}
+                tickFormatter={(v: number) => v >= 1000 ? `${(v / 1000).toFixed(1)}k` : String(v)}
+              />
               <Tooltip
                 contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--accent-cyan)', borderRadius: 8, fontFamily: 'Share Tech Mono', color: 'var(--text-primary)' }}
                 labelStyle={{ color: 'var(--text-primary)' }}
@@ -638,18 +612,18 @@ export default function DashboardPage() {
               </span>
             </div>
             <span style={{ fontFamily: 'Share Tech Mono', fontSize: 20, fontWeight: 700, color: 'var(--text-primary)' }}>
-              {completedJobs}
+              {todayCompleted}
             </span>
           </div>
           <div className="quick-stat-row">
             <div className="quick-stat-left">
               <ClockIcon color="var(--accent-amber)" />
               <span style={{ fontFamily: 'Rajdhani', fontSize: 13, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
-                Pending Jobs
+                Failed Today
               </span>
             </div>
             <span style={{ fontFamily: 'Share Tech Mono', fontSize: 20, fontWeight: 700, color: 'var(--text-primary)' }}>
-              {pendingJobs}
+              {todayFailed}
             </span>
           </div>
           <div className="quick-stat-row">
@@ -660,7 +634,7 @@ export default function DashboardPage() {
               </span>
             </div>
             <span style={{ fontFamily: 'Share Tech Mono', fontSize: 20, fontWeight: 700, color: 'var(--text-primary)' }}>
-              {processingJobs}
+              {todayProcessing}
             </span>
           </div>
           <div className="quick-stat-row" style={{ borderBottom: 'none' }}>
@@ -671,7 +645,7 @@ export default function DashboardPage() {
               </span>
             </div>
             <span style={{ fontFamily: 'Share Tech Mono', fontSize: 20, fontWeight: 700, color: 'var(--accent-cyan)' }}>
-              {totalPages.toLocaleString()}
+              {todayTotalPages.toLocaleString()}
             </span>
           </div>
         </div>
