@@ -270,7 +270,7 @@ export class PrintRouter {
         // ── Find printer + its owning node ──────────────────────────────────
         const printer = await this.fastify.knex('printers')
             .leftJoin('clients', 'printers.client_id', 'clients.id')
-            .select('printers.*', 'clients.id as client_id', 'clients.hostname as client_hostname', 'clients.status as client_status')
+            .select('printers.*', 'clients.id as client_id', 'clients.hostname as client_hostname', 'clients.is_online as client_online')
             .where('printers.id', printerId)
             .first();
 
