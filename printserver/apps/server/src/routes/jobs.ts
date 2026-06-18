@@ -405,6 +405,57 @@ export async function setupJobsRoutes(fastify: FastifyInstance) {
         return { success: true };
     });
 
+    // ─── Reprint ────────────────────────────────────────────────────────────
+    // Creates a NEW job clone of an existing (completed/failed/cancelled) job.
+    // Different from retry: retry re-queues the same row; reprint inserts a new one.
+    fastify.post('/:jobId/reprint', async (request, reply) => {
+        const { jobId } = request.params as { jobId: string };
+
+        const job = await fastify.knex('print_jobs')
+            .where({ job_id: jobId })
+            .first();
+
+        if (!job) {
+            return reply.status(404).send({ error: 'Job not found' });
+        }
+
+        // Generate a new job_id for the clone
+        const crypto = await import('crypto');
+        const newJobId = crypto.randomUUID();
+
+        const [cloned] = await fastify.knex('print_jobs')
+            .insert({
+                job_id: newJobId,
+                user_id: job.user_id,
+                client_id: job.client_id,
+                printer_id: job.printer_id,
+                file_path: job.file_path,
+                file_name: job.file_name,
+                file_type: job.file_type,
+                copies: job.copies || 1,
+                pages: job.pages || 0,
+                options: job.options || {},
+                status: 'queued',
+                attempts: 0,
+                source: 'reprint',
+            })
+            .returning('*');
+
+        const { addPrintJob } = await import('../queues/index.js');
+        await addPrintJob({
+            jobId: cloned.id,
+            printerId: cloned.printer_id,
+            filePath: cloned.file_path,
+            copies: cloned.copies,
+            options: {}
+        });
+
+        fastify.io?.emit('job:new', { jobId: newJobId });
+        await cache.invalidate('jobs:*');
+
+        return { success: true, jobId: newJobId };
+    });
+
     // ─── Dead-Letter Queue (DLQ) ──────────────────────────────────────────
     // Jobs that exhausted all auto-retries + failover end up status='failed'.
     // These endpoints give a central place to inspect, bulk-requeue, or discard

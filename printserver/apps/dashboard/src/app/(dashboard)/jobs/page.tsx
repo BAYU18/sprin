@@ -177,6 +177,15 @@ export default function JobsPage() {
     }
   };
 
+  const handleReprint = async (jobId: string) => {
+    try {
+      await jobsApi.reprint(jobId);
+      fetchJobs();
+    } catch (error) {
+      console.error('Failed to reprint job:', error);
+    }
+  };
+
   const handleExport = async () => {
     window.open(`${process.env.NEXT_PUBLIC_API_URL}/api/jobs/export/csv`, '_blank');
   };
@@ -381,7 +390,7 @@ export default function JobsPage() {
                 background: 'rgba(0,212,255,0.04)',
                 borderBottom: '1px solid var(--border)',
               }}>
-                {['Job ID', 'File Name', 'User', 'Printer', 'Pages', 'Status', 'Created', 'Actions'].map((h) => (
+                {['Job ID', 'File Name', 'User', 'Printer', 'Node', 'Pages', 'Status', 'Created', 'Actions'].map((h) => (
                   <th key={h} style={{
                     padding: '11px 16px',
                     textAlign: 'left',
@@ -403,7 +412,7 @@ export default function JobsPage() {
                 /* Skeleton rows */
                 Array.from({ length: 5 }).map((_, i) => (
                   <tr key={i} style={{ borderBottom: '1px solid var(--border)' }}>
-                    {Array.from({ length: 8 }).map((_, j) => (
+                    {Array.from({ length: 9 }).map((_, j) => (
                       <td key={j} style={{ padding: '14px 16px' }}>
                         <div className="skeleton-pulse" style={{ height: '14px', borderRadius: '4px', width: j === 1 ? '140px' : '70px' }} />
                       </td>
@@ -412,7 +421,7 @@ export default function JobsPage() {
                 ))
               ) : jobs.length === 0 ? (
                 <tr>
-                  <td colSpan={8}>
+                  <td colSpan={9}>
                     <div className="empty-state" style={{ margin: '16px', borderRadius: '8px' }}>
                       <FileText size={32} style={{ margin: '0 auto 8px', color: 'var(--text-muted)' }} />
                       No jobs found
@@ -496,6 +505,24 @@ export default function JobsPage() {
                         {job.printer_name || 'N/A'}
                       </td>
 
+                      {/* Node */}
+                      <td style={{ padding: '13px 16px', fontSize: '12px', color: 'var(--text-muted)' }}>
+                        {job.client_hostname ? (
+                          <span style={{
+                            fontFamily: "'Share Tech Mono', monospace",
+                            fontSize: '11px',
+                            background: 'rgba(0,212,255,0.06)',
+                            border: '1px solid rgba(0,212,255,0.15)',
+                            borderRadius: '4px',
+                            padding: '2px 6px',
+                            color: 'var(--accent-cyan)',
+                            whiteSpace: 'nowrap',
+                          }}>
+                            {job.client_hostname}
+                          </span>
+                        ) : '—'}
+                      </td>
+
                       {/* Pages */}
                       <td style={{ padding: '13px 16px', fontFamily: "'Share Tech Mono', monospace", fontSize: '13px', color: 'var(--text-primary)', textAlign: 'center' }}>
                         {job.pages * job.copies}
@@ -571,6 +598,34 @@ export default function JobsPage() {
                               }}
                             >
                               <RotateCcw size={14} />
+                            </button>
+                          )}
+
+                          {/* Reprint (completed, failed, cancelled) */}
+                          {['completed', 'failed', 'cancelled'].includes(job.status) && (
+                            <button
+                              onClick={() => handleReprint(job.job_id)}
+                              title="Reprint"
+                              style={{
+                                width: '30px', height: '30px',
+                                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                background: 'rgba(0,255,136,0.08)',
+                                border: '1px solid rgba(0,255,136,0.2)',
+                                borderRadius: '6px',
+                                color: '#00ff88',
+                                cursor: 'pointer',
+                                transition: 'all 0.2s ease',
+                              }}
+                              onMouseEnter={(e) => {
+                                (e.currentTarget as HTMLButtonElement).style.background = 'rgba(0,255,136,0.2)';
+                                (e.currentTarget as HTMLButtonElement).style.boxShadow = '0 0 8px rgba(0,255,136,0.4)';
+                              }}
+                              onMouseLeave={(e) => {
+                                (e.currentTarget as HTMLButtonElement).style.background = 'rgba(0,255,136,0.08)';
+                                (e.currentTarget as HTMLButtonElement).style.boxShadow = 'none';
+                              }}
+                            >
+                              <FileText size={14} />
                             </button>
                           )}
 

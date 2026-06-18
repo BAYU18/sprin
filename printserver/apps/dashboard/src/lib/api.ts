@@ -100,6 +100,7 @@ export const jobs = {
   submit: (data: any) => api.post('/api/jobs/submit', data),
   cancel: (jobId: string) => api.post(`/api/jobs/${jobId}/cancel`),
   retry: (jobId: string) => api.post(`/api/jobs/${jobId}/retry`),
+  reprint: (jobId: string) => api.post(`/api/jobs/${jobId}/reprint`),
   hold: (jobId: string) => api.post(`/api/jobs/${jobId}/hold`),
   release: (jobId: string) => api.post(`/api/jobs/${jobId}/release`),
   stats: {
