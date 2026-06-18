@@ -8,6 +8,7 @@ import websocket from '@fastify/websocket';
 import staticFiles from '@fastify/static';
 import multipart from '@fastify/multipart';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { setupDatabase } from './db/knex.js';
 import { setupRedis } from './services/redis.js';
@@ -183,6 +184,31 @@ async function start() {
         if (IS_CENTRAL) {
             await autoHealScheduler(fastify);
             startAutoClearOffline(fastify);
+
+            // ── Job file cleanup (every hour, delete files > 1 day) ──────
+            const JOB_FILES_DIR = process.env.JOB_FILES_DIR || path.join(process.cwd(), 'data', 'job-files');
+            const cleanupJobFiles = () => {
+                try {
+                    if (!fs.existsSync(JOB_FILES_DIR)) return;
+                    const files = fs.readdirSync(JOB_FILES_DIR);
+                    const now = Date.now();
+                    const maxAge = 24 * 60 * 60 * 1000; // 1 day
+                    let removed = 0;
+                    for (const f of files) {
+                        const fp = path.join(JOB_FILES_DIR, f);
+                        const stat = fs.statSync(fp);
+                        if (now - stat.mtimeMs > maxAge) {
+                            fs.unlinkSync(fp);
+                            removed++;
+                        }
+                    }
+                    if (removed > 0) logger.info(`[Cleanup] Removed ${removed} job files older than 1 day`);
+                } catch (err) {
+                    logger.warn(`[Cleanup] Job file cleanup error: ${(err as Error).message}`);
+                }
+            };
+            setInterval(cleanupJobFiles, 60 * 60 * 1000); // every hour
+            cleanupJobFiles(); // run once on startup
         }
 
         if (IS_NODE) {

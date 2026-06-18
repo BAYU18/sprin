@@ -15,6 +15,8 @@
 
 import * as net from 'net';
 import * as http from 'http';
+import * as fs from 'fs';
+import * as path from 'path';
 import { logger } from '../utils/logger.js';
 import { ipp } from '../ipp-import.js';
 import { scaleZpl, isZpl } from '../utils/zpl-scaler.js';
@@ -245,6 +247,12 @@ export class IPPServer {
             const fileName = `raw-${Date.now()}`;
             let printData = data;
 
+            // ── Save raw data to disk for reprint support ────────────────────
+            const JOB_FILES_DIR = process.env.JOB_FILES_DIR || path.join(process.cwd(), 'data', 'job-files');
+            if (!fs.existsSync(JOB_FILES_DIR)) fs.mkdirSync(JOB_FILES_DIR, { recursive: true });
+            const savedFilePath = path.join(JOB_FILES_DIR, `${fileName}.raw`);
+            fs.writeFileSync(savedFilePath, printData);
+
             // ── ZPL Scale Compensation (RAW TCP path) ──────────────────
             // The Windows driver may send ZPL with coordinates sized for
             // a larger logical page than the actual label. Check the
@@ -274,7 +282,7 @@ export class IPPServer {
                     printer_id: printer.id,
                     job_name: fileName,
                     file_name: fileName,
-                    file_path: 'raw-tcp',
+                    file_path: savedFilePath,
                     file_type: 'raw',
                     file_size: printData.length,
                     paper_size: 'Default',
@@ -881,6 +889,12 @@ export class IPPServer {
             const fileName = `raw-${Date.now()}`;
             const base64Data = data.toString('base64');
 
+            // ── Save raw data to disk for reprint support ────────────────────
+            const JOB_FILES_DIR = process.env.JOB_FILES_DIR || path.join(process.cwd(), 'data', 'job-files');
+            if (!fs.existsSync(JOB_FILES_DIR)) fs.mkdirSync(JOB_FILES_DIR, { recursive: true });
+            const savedFilePath2 = path.join(JOB_FILES_DIR, `${fileName}.raw`);
+            fs.writeFileSync(savedFilePath2, data);
+
             logger.info(`[RAW] ${peer} → printer=${printer.name} (id=${printer.id}, client=${printer.client_id}) bytes=${data.length}`);
             // Diagnostic: dump first 64 bytes as hex + ASCII so we can see the
             // actual wire format (ESC/P starts with 1B 40; PDF=%PDF; PS=%!).
@@ -900,7 +914,7 @@ export class IPPServer {
                     printer_id: printer.id,
                     job_name: fileName,
                     file_name: fileName,
-                    file_path: 'raw-tcp',
+                    file_path: savedFilePath2,
                     file_type: 'raw',
                     file_size: data.length,
                     paper_size: 'Default',
