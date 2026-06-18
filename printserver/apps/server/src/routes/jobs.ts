@@ -434,10 +434,11 @@ export async function setupJobsRoutes(fastify: FastifyInstance) {
                 file_type: job.file_type,
                 copies: job.copies || 1,
                 pages: job.pages || 0,
-                options: job.options || {},
+                job_name: job.job_name || job.file_name,
                 status: 'queued',
                 attempts: 0,
-                source: 'reprint',
+                source_app: 'reprint',
+                paper_size: job.paper_size || 'Default',
             })
             .returning('*');
 
