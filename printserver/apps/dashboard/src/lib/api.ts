@@ -77,6 +77,7 @@ export const printers = {
   resumeQueue: (id: number) => api.post(`/api/queues/printer/${id}/resume`),
 };
 
+
 // TIER-2 #8: queue management
 export const queues = {
   list: (params?: any) => api.get('/api/queues', { params }),

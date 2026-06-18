@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
-import { jobs as jobsApi } from '@/lib/api';
+import { jobs as jobsApi, clients as clientsApi } from '@/lib/api';
 import { on, off } from '@/hooks/useSocket';
 import {
   FileText, RefreshCw, Search, Filter, Download,
@@ -126,9 +126,8 @@ export default function JobsPage() {
 
   // Fetch nodes list for filter dropdown
   useEffect(() => {
-    fetch('/api/clients')
-      .then(r => r.json())
-      .then(data => setNodes(data.clients || data || []))
+    clientsApi.list()
+      .then(res => setNodes(Array.isArray(res.data) ? res.data : res.data.clients || []))
       .catch(() => {});
   }, []);
 

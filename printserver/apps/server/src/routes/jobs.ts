@@ -14,7 +14,7 @@ const submitJobSchema = z.object({
 const jobQuerySchema = z.object({
     page: z.coerce.number().default(1),
     limit: z.coerce.number().default(50),
-    status: z.enum(['queued', 'processing', 'completed', 'failed', 'cancelled']).optional(),
+    status: z.enum(['queued', 'processing', 'completed', 'failed', 'cancelled', 'held', 'pending']).optional(),
     userId: z.coerce.number().optional(),
     clientId: z.coerce.number().optional(),
     printerId: z.coerce.number().optional()
