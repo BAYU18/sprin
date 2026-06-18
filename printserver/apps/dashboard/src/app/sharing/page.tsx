@@ -27,6 +27,7 @@ interface Printer {
   node_last_seen: string | null;
   printer_updated_at: string | null;
   has_bat: boolean;
+  slug?: string;
   is_node_only?: boolean;
 }
 
@@ -696,7 +697,7 @@ export default function SharingPage() {
                   {/* Install Button */}
                   {printer.has_bat && (
                     <a
-                      href={`/downloads/printer-bat/${printer.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '')}`}
+                      href={`/downloads/printer-bat/${printer.slug || printer.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').substring(0, 200) || 'printer'}`}
                       download
                       style={{
                         display: 'block',

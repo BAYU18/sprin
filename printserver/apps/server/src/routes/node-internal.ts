@@ -402,6 +402,7 @@ export async function setupNodeInternalRoutes(fastify: FastifyInstance) {
             const status = body.status || 'online';
             const printers = body.printers || [];
             const osInfo = body.os_info || {};
+            const reportedIp = body.ip_address || null;
 
             logger.info(`[NodeAPI] Heartbeat from node: ${nodeName}, status: ${status}, printers: ${printers.length}`);
 
@@ -418,6 +419,19 @@ export async function setupNodeInternalRoutes(fastify: FastifyInstance) {
                         is_online: status === 'online',
                         metadata: JSON.stringify({ printers, os_info: osInfo })
                     });
+            }
+
+            // Also update the clients table IP if agent reported one
+            // (the node-internal heartbeat is the primary heartbeat path for newer agents)
+            if (reportedIp && /^[\d.]+$/.test(reportedIp) && reportedIp !== '127.0.0.1') {
+                const client = await fastify.knex('clients')
+                    .where('hostname', nodeName)
+                    .first();
+                if (client) {
+                    await fastify.knex('clients')
+                        .where({ id: client.id })
+                        .update({ ip_address: reportedIp, last_seen: new Date() });
+                }
             }
 
             // Record heartbeat in history table

@@ -32,7 +32,8 @@ const heartbeatSchema = z.object({
         status: z.string().optional(),
         jobs_in_queue: z.number().int().nonnegative().optional()
     })).optional(),
-    jobs: z.any().optional()
+    jobs: z.any().optional(),
+    ip_address: z.string().optional()
 });
 
 // Derive the real client IP from the TCP connection. Normalizes the
@@ -234,17 +235,20 @@ export async function setupClientsRoutes(fastify: FastifyInstance) {
 
         const { status, printers, jobs } = body;
 
-        // Refresh the stored IP from the live connection so nodes that
-        // registered with a bad address (link-local fe80::, virtual adapter,
-        // or null) get self-healed on their next heartbeat — no re-install or
-        // re-register needed on the client.
+        // Prefer agent's self-reported IP over TCP connection IP.
+        // The agent resolves it from `ipconfig` (same as Control Panel top adapter).
+        // Connection IP can be a router/NAT address when node is on a different subnet.
+        const reportedIp = (body as any).ip_address || null;
         const connIp = getConnectionIp(request);
         const updateFields: any = {
             is_online: status === 'online',
             last_seen: new Date(),
             metadata: { printers, jobs }
         };
-        if (isUsableIp(connIp)) {
+        if (isUsableIp(reportedIp)) {
+            updateFields.ip_address = reportedIp;
+        } else if (isUsableIp(connIp)) {
+            // Fallback: trust connection IP only if agent didn't send one
             updateFields.ip_address = connIp;
         }
 

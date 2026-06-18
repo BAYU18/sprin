@@ -54,6 +54,7 @@ export async function setupSharingRoutes(fastify: FastifyInstance) {
                 'printers.driver',
                 'printers.type',
                 'printers.tags',
+                'printers.slug',
                 'printers.updated_at as printer_updated_at',
                 'clients.hostname as node_hostname',
                 'clients.ip_address as node_ip',
@@ -105,6 +106,7 @@ export async function setupSharingRoutes(fastify: FastifyInstance) {
             return {
                 id: p.id,
                 name: p.name,
+                slug: p.slug || p.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').substring(0, 200) || 'printer',
                 status: p.status || 'unknown',
                 raw_port: p.raw_port,
                 driver: p.driver,

@@ -124,40 +124,75 @@ function execPS(command, extraEnv) {
 }
 
 /**
- * Resolve the PRIMARY network adapter's IPv4 + MAC the way Windows itself does —
- * the adapter that owns the default gateway (i.e. the active LAN/internet
- * connection shown at the top of `ipconfig` / in Control Panel). This avoids
- * picking a virtual adapter (VirtualBox/VMware/Hyper-V/VPN — all 192.168.x.x)
- * which os.networkInterfaces() often lists first.
+ * Resolve the PRIMARY network adapter's IPv4 + MAC by parsing `ipconfig` output
+ * — takes the FIRST IPv4 address shown, exactly matching what you see at the
+ * top of `ipconfig` / in Control Panel → Network Connections. This is the
+ * adapter Windows considers "primary" and avoids picking virtual adapters
+ * (VirtualBox/VMware/Hyper-V/VPN) which os.networkInterfaces() often lists first.
  *
  * Strategy:
- *   1. Get-NetIPConfiguration → first adapter that has an IPv4DefaultGateway AND
- *      is physically Up. This is exactly the "topmost active" connection.
- *   2. Fallback: Get-NetRoute 0.0.0.0/0 ordered by RouteMetric → resolve its IP.
- * Returns { ip, mac } or null if PowerShell is unavailable (very old Windows).
+ *   1. Run `ipconfig` → parse for "IPv4 Address" lines, take the first non-loopback.
+ *   2. Run `getmac /fo csv /nh` → match the first physical adapter's MAC.
+ *   3. Fallback: os.networkInterfaces() if ipconfig parsing fails.
+ * Returns { ip, mac } or null.
  */
 async function resolvePrimaryNetwork() {
   if (os.platform() !== 'win32') return null;
+
+  // ── Strategy 1: parse ipconfig ───────────────────────────────────────────
   try {
-    const ps = `
-$ErrorActionPreference='SilentlyContinue';
-$cfg = Get-NetIPConfiguration | Where-Object { $_.IPv4DefaultGateway -ne $null -and $_.NetAdapter.Status -eq 'Up' } | Select-Object -First 1;
-if ($cfg -ne $null -and $cfg.IPv4Address -ne $null) {
-  $ipObj = $cfg.IPv4Address; if ($ipObj -is [array]) { $ipObj = $ipObj[0] }
-  [pscustomobject]@{ ip = $ipObj.IPAddress; mac = $cfg.NetAdapter.MacAddress } | ConvertTo-Json -Compress
-}`;
-    const out = await execPS(ps);
-    if (out) {
-      const info = JSON.parse(out);
-      if (info && info.ip) {
-        // Normalize MAC to colon-separated lower form to match os.networkInterfaces().
-        const mac = info.mac ? String(info.mac).replace(/-/g, ':').toLowerCase() : null;
-        return { ip: info.ip, mac };
+    const ipconfigOut = await execPS('ipconfig');
+    if (ipconfigOut) {
+      // Match "IPv4 Address. . . . . . . . . . . : 192.168.1.50" lines
+      // (the dots/spaces vary by locale, but "IPv4" and a dotted-quad are stable)
+      const ipv4Re = /IPv4[^:]*:\s+([\d]+\.[\d]+\.[\d]+\.[\d]+)/gi;
+      let firstIp = null;
+      let m;
+      while ((m = ipv4Re.exec(ipconfigOut)) !== null) {
+        const ip = m[1];
+        if (ip && ip !== '127.0.0.1' && ip !== '0.0.0.0') {
+          firstIp = ip;
+          break;                        // take the FIRST one — that's ipconfig top
+        }
+      }
+
+      if (firstIp) {
+        // Get MAC for the same adapter via getmac (first physical adapter)
+        let mac = null;
+        try {
+          const getmacOut = await execPS('getmac /fo csv /nh');
+          if (getmacOut) {
+            // CSV lines: "XX-XX-XX-XX-XX-XX","Adapter Name","Transport Name"
+            const macLine = getmacOut.split(/\r?\n/).find(l => /\w{2}-\w{2}-\w{2}/.test(l));
+            if (macLine) {
+              const macMatch = macLine.match(/"([\w-]+)"/);
+              if (macMatch) {
+                mac = macMatch[1].replace(/-/g, ':').toLowerCase();
+              }
+            }
+          }
+        } catch (_) { /* MAC is optional */ }
+
+        logger.info('Primary network resolved from ipconfig', { ip: firstIp, mac });
+        return { ip: firstIp, mac };
       }
     }
   } catch (e) {
-    logger.warn('resolvePrimaryNetwork (PowerShell) failed, will fall back to os.networkInterfaces()', { error: e.message });
+    logger.warn('resolvePrimaryNetwork (ipconfig) failed, will fall back to os.networkInterfaces()', { error: e.message });
   }
+
+  // ── Strategy 2 (fallback): os.networkInterfaces() ────────────────────────
+  try {
+    const ifaces = Object.values(os.networkInterfaces()).flat()
+      .filter(i => i && !i.internal && i.family === 'IPv4' && /^fe80:/i.test(i.address) === false);
+    const isPrivate = (a) => /^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)/.test(a);
+    const best = ifaces.find(i => isPrivate(i.address)) || ifaces[0] || null;
+    if (best) {
+      logger.info('Primary network fallback to os.networkInterfaces()', { ip: best.address });
+      return { ip: best.address, mac: best.mac || null };
+    }
+  } catch (_) {}
+
   return null;
 }
 
@@ -1021,10 +1056,15 @@ class APIClient {
     if (!this.clientId) return;
 
     try {
+      // Re-resolve IP on each heartbeat so the server always has the real address
+      const primary = await resolvePrimaryNetwork();
+      const ip = primary?.ip || null;
+
       await axios.post(`${this.baseUrl}/api/clients/${this.clientId}/heartbeat`, {
         status: 'online',
         printers,
         jobsInQueue: 0,
+        ip_address: ip,
         timestamp: new Date().toISOString()
       }, { timeout: 5000 });
     } catch (err) {
@@ -1042,11 +1082,16 @@ class APIClient {
    */
   async heartbeatNodeInternal(nodeName, status = 'online', printers = [], osInfo = {}) {
     try {
+      // Re-resolve IP so the server always has the real node address
+      const primary = await resolvePrimaryNetwork();
+      const ip = primary?.ip || null;
+
       const payload = {
         node_name: nodeName,
         status,
         printers,
-        os_info: osInfo
+        os_info: osInfo,
+        ip_address: ip
       };
 
       const response = await axios.post(
