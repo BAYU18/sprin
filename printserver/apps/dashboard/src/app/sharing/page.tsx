@@ -113,23 +113,25 @@ export default function SharingPage() {
     return map;
   }, [data]);
 
+  const fetchData = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_URL}/api/sharing/data`);
+      if (!res.ok) throw new Error('Failed to fetch');
+      const json = await res.json();
+      setData(json);
+      setError(null); // clear any previous error on success
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unknown error');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
-    const fetchData = async () => {
-      try {
-        const res = await fetch(`${API_URL}/api/sharing/data`);
-        if (!res.ok) throw new Error('Failed to fetch');
-        const json = await res.json();
-        setData(json);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Unknown error');
-      } finally {
-        setLoading(false);
-      }
-    };
     fetchData();
     const interval = setInterval(fetchData, 30000); // refresh every 30s
     return () => clearInterval(interval);
-  }, []);
+  }, [fetchData]);
 
   // Polling progress animation
   useEffect(() => {
@@ -301,11 +303,32 @@ export default function SharingPage() {
 
         {error && (
           <div style={{
-            background: 'var(--bg-card)', border: '1px solid var(--accent-red)',
-            borderRadius: '12px', padding: '24px', textAlign: 'center',
+            background: 'rgba(255,61,90,0.08)',
+            border: '1px solid rgba(255,61,90,0.25)',
+            borderRadius: '10px',
+            padding: '12px 20px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
             color: 'var(--accent-red)',
+            fontSize: '13px',
           }}>
-            Error: {error}
+            <span>⚠️ {error}</span>
+            <button
+              onClick={() => fetchData()}
+              style={{
+                background: 'rgba(255,61,90,0.15)',
+                border: '1px solid rgba(255,61,90,0.3)',
+                borderRadius: '6px',
+                padding: '6px 14px',
+                color: 'var(--accent-red)',
+                cursor: 'pointer',
+                fontSize: '12px',
+                fontWeight: 600,
+              }}
+            >
+              Retry
+            </button>
           </div>
         )}
 
