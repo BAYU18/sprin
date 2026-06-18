@@ -536,8 +536,9 @@ export default function JobsPage() {
                       <td style={{
                         padding: '13px 16px',
                         fontFamily: "'Share Tech Mono', monospace",
-                        fontSize: '12px',
-                        color: 'var(--text-muted)',
+                        fontSize: '14px',
+                        fontWeight: 600,
+                        color: 'var(--text-primary)',
                         whiteSpace: 'nowrap',
                       }}>
                         {format(new Date(job.created_at), 'MM/dd HH:mm')}
