@@ -98,6 +98,29 @@ export async function setupRoutes(fastify: FastifyInstance) {
             }
         });
 
+        // POST /api/admin/force-update — push agent:update to all connected nodes
+        instance.post('/admin/force-update', async (request: any, reply: any) => {
+            const body = (request.body || {}) as { secret?: string; clientId?: number };
+            const expected = process.env.ADMIN_TRIGGER_SECRET || 'printserver-admin';
+            if (body.secret && body.secret !== expected) {
+                return reply.status(403).send({ error: 'Invalid secret' });
+            }
+            const io = fastify.io;
+            if (!io) return reply.status(503).send({ error: 'Socket.IO not available' });
+
+            if (body.clientId) {
+                // Target specific node
+                io.to(`client:${body.clientId}`).emit('agent:update', { version: 'latest' });
+                logger.info(`[Admin] Force update pushed to client:${body.clientId}`);
+                return { success: true, target: `client:${body.clientId}` };
+            } else {
+                // Broadcast to all connected nodes
+                io.emit('agent:update', { version: 'latest' });
+                logger.info('[Admin] Force update broadcast to all nodes');
+                return { success: true, target: 'all' };
+            }
+        });
+
         // GET /api/queues/stats — BullMQ queue counts
         instance.get('/queues/stats', async () => {
             const { printQueue, healQueue, notificationQueue } = await import('../queues/index.js');

@@ -1212,6 +1212,18 @@ class WebSocketClient extends EventEmitter {
       this.socket.on('driver:harvest', async (data) => {
         await this.handleDriverHarvest(data);
       });
+
+      // Server pushes a forced update — triggers the auto-updater immediately
+      this.socket.on('agent:update', async (data) => {
+        logger.info('[Update] Forced update requested by server', data);
+        if (this.updater) {
+          try {
+            await this.updater.check();
+          } catch (err) {
+            logger.error('[Update] Forced check failed', { error: err.message });
+          }
+        }
+      });
     } catch (err) {
       logger.error('WebSocket connect failed', { error: err.message });
     }
@@ -1851,6 +1863,7 @@ function main() {
       }
     }
   });
+  agent.updater = updater;  // Expose to socket handlers for force-update
   updater.start();
 
   // Graceful shutdown — stop the updater timer
