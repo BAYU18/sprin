@@ -39,3 +39,6 @@ npm-debug.log*
 
 # Harvested driver files (artefak runtime, jangan di-commit — bisa puluhan MB)
 apps/server/public/drivers/
+
+# Job files (raw TCP print data, auto-cleaned daily)
+data/job-files/
