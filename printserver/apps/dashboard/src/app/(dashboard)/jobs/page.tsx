@@ -7,7 +7,7 @@ import { on, off } from '@/hooks/useSocket';
 import {
   FileText, RefreshCw, Search, Filter, Download,
   XCircle, RotateCcw, Clock, CheckCircle, Loader2,
-  Pause, Play
+  Pause, Play, Monitor
 } from 'lucide-react';
 import { format } from 'date-fns';
 
@@ -85,6 +85,8 @@ export default function JobsPage() {
   const [page, setPage] = useState(1);
   const [status, setStatus] = useState('');
   const [search, setSearch] = useState('');
+  const [nodeFilter, setNodeFilter] = useState('');
+  const [nodes, setNodes] = useState<any[]>([]);
   // TIER-2 #4: mobile filter drawer state
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [queueStats, setQueueStats] = useState<any>(null);
@@ -106,6 +108,7 @@ export default function JobsPage() {
       const params: any = { page, limit: LIMIT };
       if (status) params.status = status;
       if (search) params.search = search;
+      if (nodeFilter) params.clientId = nodeFilter;
 
       const response = await jobsApi.list(params);
       setJobs(response.data.jobs);
@@ -115,11 +118,19 @@ export default function JobsPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, status, search]);
+  }, [page, status, search, nodeFilter]);
 
   useEffect(() => {
     fetchJobs();
   }, [fetchJobs]);
+
+  // Fetch nodes list for filter dropdown
+  useEffect(() => {
+    fetch('/api/clients')
+      .then(r => r.json())
+      .then(data => setNodes(data.clients || data || []))
+      .catch(() => {});
+  }, []);
 
   // Socket real-time updates
   useEffect(() => {
@@ -327,6 +338,29 @@ export default function JobsPage() {
             </select>
           </div>
 
+          {/* Node filter */}
+          <div style={{ position: 'relative', minWidth: '150px' }}>
+            <Monitor
+              size={14}
+              style={{
+                position: 'absolute', left: '12px', top: '50%',
+                transform: 'translateY(-50%)', color: 'var(--text-muted)',
+                pointerEvents: 'none',
+              }}
+            />
+            <select
+              value={nodeFilter}
+              onChange={(e) => { setPage(1); setNodeFilter(e.target.value); }}
+              className="input"
+              style={{ paddingLeft: '34px', appearance: 'none', cursor: 'pointer' }}
+            >
+              <option value="">All Nodes</option>
+              {nodes.map((n: any) => (
+                <option key={n.id} value={n.id}>{n.hostname}</option>
+              ))}
+            </select>
+          </div>
+
           {/* Refresh */}
           <button
             onClick={fetchJobs}
@@ -390,7 +424,7 @@ export default function JobsPage() {
                 background: 'rgba(0,212,255,0.04)',
                 borderBottom: '1px solid var(--border)',
               }}>
-                {['Job ID', 'Printer', 'Node', 'Pages', 'Status', 'Created', 'Actions'].map((h) => (
+                {['Job ID', 'Printer', 'Node', 'Source IP', 'Pages', 'Status', 'Created', 'Actions'].map((h) => (
                   <th key={h} style={{
                     padding: '11px 16px',
                     textAlign: 'left',
@@ -492,6 +526,15 @@ export default function JobsPage() {
                         {job.client_hostname ? (
                           <span style={{ whiteSpace: 'nowrap' }}>
                             {job.client_hostname}
+                          </span>
+                        ) : '—'}
+                      </td>
+
+                      {/* Source IP */}
+                      <td style={{ padding: '13px 16px', fontSize: '14px', color: 'var(--text-primary)', fontWeight: 600 }}>
+                        {job.source_ip ? (
+                          <span style={{ whiteSpace: 'nowrap' }}>
+                            {job.source_ip}
                           </span>
                         ) : '—'}
                       </td>

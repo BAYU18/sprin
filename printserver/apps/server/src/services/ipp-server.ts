@@ -290,6 +290,7 @@ export class IPPServer {
                     status: 'processing',
                     priority: 'normal',
                     source_app: 'raw-tcp',
+                    source_ip: peer.split(':')[0],
                     started_at: new Date()
                 })
                 .returning(['id']);
@@ -922,6 +923,7 @@ export class IPPServer {
                     status: 'processing',
                     priority: 'normal',
                     source_app: 'raw-tcp',
+                    source_ip: peer.split(':')[0],
                     started_at: new Date()
                 })
                 .returning(['id']);

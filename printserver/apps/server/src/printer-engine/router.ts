@@ -15,6 +15,7 @@ export interface PrintJobData {
     fileType: string;
     copies?: number;
     options?: any;
+    sourceIp?: string;
 }
 
 export interface ProcessJobData {
@@ -174,7 +175,8 @@ export class PrintRouter {
             fileName,
             fileType,
             copies = 1,
-            options = {}
+            options = {},
+            sourceIp = ''
         } = data;
 
         // Validasi printer exists
@@ -209,7 +211,8 @@ export class PrintRouter {
                 pages: options.pages || 1,
                 copies: copies,
                 status: 'queued',
-                priority: options.priority || 'normal'
+                priority: options.priority || 'normal',
+                source_ip: sourceIp
             })
             .returning('*');
 

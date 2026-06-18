@@ -301,7 +301,8 @@ export async function setupJobsRoutes(fastify: FastifyInstance) {
                 fileName: body.fileName,
                 fileType: body.fileType,
                 copies,
-                options: body.options || {}
+                options: body.options || {},
+                sourceIp: request.ip || request.socket?.remoteAddress || '',
             });
 
             // Increment quota_used for this user
@@ -438,6 +439,7 @@ export async function setupJobsRoutes(fastify: FastifyInstance) {
                 status: 'queued',
                 attempts: 0,
                 source_app: 'reprint',
+                source_ip: request.ip || request.socket?.remoteAddress || '',
                 paper_size: job.paper_size || 'Default',
             })
             .returning('*');
