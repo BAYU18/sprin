@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import Link from 'next/link';
 import { jobs as jobsApi, clients as clientsApi } from '@/lib/api';
 import { on, off } from '@/hooks/useSocket';
@@ -90,6 +91,8 @@ export default function JobsPage() {
   const [nodeDropdownOpen, setNodeDropdownOpen] = useState(false);
   const [nodeSearch, setNodeSearch] = useState('');
   const nodeDropdownRef = useRef<HTMLDivElement>(null);
+  const nodeTriggerRef = useRef<HTMLDivElement>(null);
+  const [dropdownPos, setDropdownPos] = useState<{ top: number; left: number; width: number } | null>(null);
   // TIER-2 #4: mobile filter drawer state
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [queueStats, setQueueStats] = useState<any>(null);
@@ -302,7 +305,7 @@ export default function JobsPage() {
       </div>
 
       {/* ── Filter toolbar (desktop only, mobile uses drawer) ─────── */}
-      <div className="card desktop-only" style={{ padding: '16px 20px' }}>
+      <div className="card desktop-only" style={{ padding: '16px 20px', overflow: 'visible' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
 
           {/* Search */}
@@ -355,7 +358,14 @@ export default function JobsPage() {
           {/* Node filter — searchable dropdown */}
           <div style={{ position: 'relative', minWidth: '180px' }} ref={nodeDropdownRef}>
             <div
-              onClick={() => setNodeDropdownOpen(!nodeDropdownOpen)}
+              ref={nodeTriggerRef}
+              onClick={() => {
+                if (!nodeDropdownOpen && nodeTriggerRef.current) {
+                  const rect = nodeTriggerRef.current.getBoundingClientRect();
+                  setDropdownPos({ top: rect.bottom + 4, left: rect.left, width: rect.width });
+                }
+                setNodeDropdownOpen(!nodeDropdownOpen);
+              }}
               className="input"
               style={{
                 display: 'flex', alignItems: 'center', gap: 6,
@@ -376,12 +386,13 @@ export default function JobsPage() {
                 : 'All Nodes'}
               <span style={{ marginLeft: 'auto', fontSize: 10, color: 'var(--text-muted)' }}>▾</span>
             </div>
-            {nodeDropdownOpen && (
+            {nodeDropdownOpen && dropdownPos && createPortal(
               <div style={{
-                position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 100,
+                position: 'fixed', top: dropdownPos.top, left: dropdownPos.left,
+                width: dropdownPos.width, zIndex: 9999,
                 background: 'var(--bg-card)', border: '1px solid var(--accent-cyan)',
-                borderRadius: 8, marginTop: 4, maxHeight: 240, overflow: 'hidden',
-                boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
+                borderRadius: 8, maxHeight: 260, overflow: 'hidden',
+                boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
               }}>
                 <input
                   autoFocus
@@ -455,7 +466,7 @@ export default function JobsPage() {
                   }
                 </div>
               </div>
-            )}
+            , document.body)}
           </div>
 
           {/* Refresh */}
