@@ -105,20 +105,21 @@ async function buildServer() {
     await ippServer.start();
     fastify.decorate('ippServer', ippServer);
 
-    // Wire socket.io to receive print:result from agents
-    if (fastify.io) {
-        fastify.io.on('connection', (socket: any) => {
-            socket.on('print:result', (data: any) => {
-                ippServer.handleAgentResult(data);
-            });
-        });
-    }
-
     const printRouter = new PrintRouter(fastify);
     logger.info('About to initialize PrintRouter...');
     await printRouter.initialize();
     logger.info('PrintRouter initialized');
     fastify.decorate('printRouter', printRouter);
+
+    // Wire print:result to BOTH IPP server and PrintRouter jobWaiters
+    if (fastify.io) {
+        fastify.io.on('connection', (socket: any) => {
+            socket.on('print:result', (data: any) => {
+                ippServer.handleAgentResult(data);
+                printRouter.handleAgentResult(data);
+            });
+        });
+    }
 
     if (IS_CENTRAL) {
         const centralRouter = new CentralPrintRouter(fastify);

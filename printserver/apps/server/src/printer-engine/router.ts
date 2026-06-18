@@ -4,6 +4,7 @@ import { createDriver, PrinterDriver, PrinterStatus } from './drivers/index.js';
 import { addPrintJob, printQueue } from '../queues/index.js';
 import { notifyJobRetrying, notifyJobFailedFinal } from '../services/telegram-notifier.js';
 import path from 'path';
+import fs from 'fs';
 
 export interface PrintJobData {
     userId: number;
@@ -29,6 +30,7 @@ export class PrintRouter {
     private drivers: Map<number, PrinterDriver>;
     private failoverMap: Map<number, number[]>;
     private healthCheckInterval: NodeJS.Timeout | null = null;
+    private jobWaiters: Map<string, (result: any) => void> = new Map();
 
     constructor(fastify: FastifyInstance) {
         this.fastify = fastify;
@@ -56,8 +58,43 @@ export class PrintRouter {
         }
 
         this.startHealthCheck();
+        this.startStuckJobReaper();
 
         logger.info('[PrintRouter] Initialization complete');
+    }
+
+    /**
+     * Periodically clean up jobs stuck in 'processing' state for >5 minutes.
+     * These can happen if the server crashes mid-dispatch or agent disconnects
+     * without sending a result.
+     */
+    private startStuckJobReaper(): void {
+        setInterval(async () => {
+            try {
+                const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000);
+                const stuckJobs = await this.fastify.knex('print_jobs')
+                    .where({ status: 'processing' })
+                    .where('started_at', '<', fiveMinAgo);
+
+                for (const job of stuckJobs) {
+                    logger.warn(`[PrintRouter] Reaper: force-failing stuck job ${job.id} (processing since ${job.started_at})`);
+                    await this.fastify.knex('print_jobs')
+                        .where({ id: job.id })
+                        .update({
+                            status: 'failed',
+                            error_message: 'Job timed out — agent did not report back within 5 minutes',
+                            attempts: (job.attempts || 0) + 1
+                        });
+                    this.fastify.io?.emit('job:error', {
+                        jobId: job.job_id,
+                        error: 'Job timed out'
+                    });
+                    await this.handleFailure(job.id, job.printer_id, 'Timeout — agent did not report back');
+                }
+            } catch (err) {
+                logger.error('[PrintRouter] Stuck job reaper error:', err);
+            }
+        }, 60_000); // Run every 60 seconds
     }
 
     /**
@@ -230,56 +267,92 @@ export class PrintRouter {
             return { success: true, error: 'Job is held' };
         }
 
-        // Get driver
-        let driver = this.drivers.get(printerId);
-        if (!driver) {
-            logger.error(`[PrintRouter] Driver for printer ${printerId} not found`);
-            return { success: false, error: 'Driver not found' };
+        // ── Find printer + its owning node ──────────────────────────────────
+        const printer = await this.fastify.knex('printers')
+            .leftJoin('clients', 'printers.client_id', 'clients.id')
+            .select('printers.*', 'clients.id as client_id', 'clients.hostname as client_hostname', 'clients.status as client_status')
+            .where('printers.id', printerId)
+            .first();
+
+        if (!printer) {
+            logger.error(`[PrintRouter] Printer ${printerId} not found`);
+            return { success: false, error: 'Printer not found' };
         }
 
-        // Try to print
+        if (!printer.client_id) {
+            logger.error(`[PrintRouter] Printer ${printerId} is not bound to any node`);
+            await this.fastify.knex('print_jobs')
+                .where({ id: jobId })
+                .update({ status: 'failed', error_message: 'Printer is not bound to any node', attempts: job.attempts + 1 });
+            return { success: false, error: 'Printer is not bound to any node' };
+        }
+
+        // ── Check if agent is connected via Socket.IO ───────────────────────
+        const io = this.fastify.io;
+        if (!io) {
+            logger.error(`[PrintRouter] Socket.IO not available`);
+            return { success: false, error: 'Socket.IO not available' };
+        }
+
+        const room = io.sockets.adapter.rooms.get(`client:${printer.client_id}`);
+        if (!room || room.size === 0) {
+            const errMsg = `Node "${printer.client_hostname || printer.client_id}" is offline — cannot dispatch print job`;
+            logger.warn(`[PrintRouter] ${errMsg}`);
+            await this.fastify.knex('print_jobs')
+                .where({ id: jobId })
+                .update({ status: 'failed', error_message: errMsg, attempts: job.attempts + 1 });
+            this.fastify.io?.emit('job:error', { jobId: job.job_id, error: errMsg });
+            return { success: false, error: errMsg };
+        }
+
+        // ── Update status to processing ─────────────────────────────────────
+        await this.fastify.knex('print_jobs')
+            .where({ id: jobId })
+            .update({ status: 'processing', started_at: new Date() });
+
+        // ── Dispatch to agent via Socket.IO ─────────────────────────────────
         try {
-            // Update status to processing
-            await this.fastify.knex('print_jobs')
-                .where({ id: jobId })
-                .update({
-                    status: 'processing',
-                    started_at: new Date()
-                });
-
-            // Execute print
-            await driver.print(filePath, copies, options);
-
-            // Success - update job status
-            await this.fastify.knex('print_jobs')
-                .where({ id: jobId })
-                .update({
-                    status: 'completed',
-                    completed_at: new Date()
-                });
-
-            // Update queue status
-            await this.fastify.knex('queues')
-                .where({ print_job_id: jobId })
-                .update({ status: 'completed', completed_at: new Date() });
-
-            // Update user quota
-            if (job.user_id) {
-                await this.fastify.knex('users')
-                    .where({ id: job.user_id })
-                    .increment('quota_used', job.pages * copies);
-            }
-
-            // Emit completion event
-            this.fastify.io?.emit('job:complete', {
-                jobId: job.job_id,
-                printerId: printerId,
-                status: 'completed'
+            const result = await this.forwardToAgent(printer.client_id, {
+                jobId: job.id,
+                action: 'print',
+                printerName: printer.name,
+                fileName: job.file_name,
+                copies: copies || job.copies || 1,
+                fileType: job.file_type,
+                fileData: await this.readFileAsBase64(filePath),
+                paper: options?.paper || null,
+                options: options || {},
             });
 
-            logger.info(`[PrintRouter] Job ${jobId} completed successfully`);
+            if (result.success) {
+                // Success — update job status
+                await this.fastify.knex('print_jobs')
+                    .where({ id: jobId })
+                    .update({ status: 'completed', completed_at: new Date() });
 
-            return { success: true };
+                // Update queue status
+                await this.fastify.knex('queues')
+                    .where({ print_job_id: jobId })
+                    .update({ status: 'completed', completed_at: new Date() });
+
+                // Update user quota
+                if (job.user_id) {
+                    await this.fastify.knex('users')
+                        .where({ id: job.user_id })
+                        .increment('quota_used', (job.pages || 1) * (copies || job.copies || 1));
+                }
+
+                this.fastify.io?.emit('job:complete', {
+                    jobId: job.job_id,
+                    printerId: printerId,
+                    status: 'completed'
+                });
+
+                logger.info(`[PrintRouter] Job ${jobId} completed successfully via node ${printer.client_hostname || printer.client_id}`);
+                return { success: true };
+            } else {
+                throw new Error(result.error || 'Print failed on agent');
+            }
 
         } catch (error: any) {
             logger.error(`[PrintRouter] Job ${jobId} failed: ${error.message}`);
@@ -294,9 +367,57 @@ export class PrintRouter {
                 });
 
             // Handle failure (retry or failover)
-            const shouldRetry = await this.handleFailure(jobId, printerId, error.message);
+            await this.handleFailure(jobId, printerId, error.message);
 
             return { success: false, error: error.message };
+        }
+    }
+
+    /**
+     * Read a file and return base64-encoded content for Socket.IO dispatch.
+     */
+    private async readFileAsBase64(filePath: string): Promise<string> {
+        if (!fs.existsSync(filePath)) {
+            throw new Error(`File not found: ${filePath}`);
+        }
+        const buffer = fs.readFileSync(filePath);
+        return buffer.toString('base64');
+    }
+
+    /**
+     * Dispatch a print job to a Windows agent via Socket.IO and wait for result.
+     * Same mechanism as IPP server's forwardToAgent — 90s timeout.
+     */
+    private forwardToAgent(clientId: number, payload: any): Promise<{ success: boolean; error?: string; method?: string }> {
+        const io = this.fastify.io;
+        if (!io) throw new Error('Socket.IO not available');
+
+        return new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => {
+                this.jobWaiters.delete(String(payload.jobId));
+                reject(new Error('Print job timed out after 90s (agent did not report back)'));
+            }, 90000);
+
+            this.jobWaiters.set(String(payload.jobId), (result: any) => {
+                clearTimeout(timeout);
+                resolve(result);
+            });
+
+            // Push job to the agent's room
+            io.to(`client:${clientId}`).emit('print:execute', payload);
+            logger.info(`[PrintRouter] Job ${payload.jobId} dispatched to client:${clientId} room`);
+        });
+    }
+
+    /**
+     * Resolve a waiting forwardToAgent() promise when the agent sends print:result.
+     * Called from Socket.IO handler in index.ts.
+     */
+    handleAgentResult(data: { jobId: number | string; success: boolean; method?: string; error?: string }) {
+        const waiter = this.jobWaiters.get(String(data.jobId));
+        if (waiter) {
+            waiter(data);
+            this.jobWaiters.delete(String(data.jobId));
         }
     }
 
