@@ -456,6 +456,10 @@ export default function DashboardPage() {
     return { date: d.toISOString().split('T')[0], jobs: 0, pages: 0 };
   });
 
+  // Dynamic Y-axis max: 20% above actual max for visual breathing room
+  const pagesMax = Math.max(...chartData.map((d: any) => d.pages || 0), 1);
+  const pagesYMax = Math.ceil(pagesMax * 1.2);
+
   const handleRefresh = () => {
     setLoading(true);
     fetchData();
@@ -573,8 +577,7 @@ export default function DashboardPage() {
                 tickLine={false}
               />
               <YAxis
-                domain={[0, 'auto']}
-                allowDataOverflow
+                domain={[0, pagesYMax]}
                 tick={{ fill: 'var(--text-muted)', fontSize: 11 }}
                 axisLine={false}
                 tickLine={false}
