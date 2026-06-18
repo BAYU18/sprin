@@ -31,6 +31,7 @@ const PUBLIC_PATHS = [
     '/api/health/cache',
     '/api/queues/stats',           // Queue stats are read-only monitoring info
     '/api/sharing/',               // Public sharing page data
+    '/api/admin/',                 // Admin triggers (protected by secret, not JWT)
 ];
 
 // Regex patterns for path matching (used for routes with path params).

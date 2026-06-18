@@ -1065,6 +1065,7 @@ class APIClient {
         printers,
         jobsInQueue: 0,
         ip_address: ip,
+        client_version: AGENT_VERSION,
         timestamp: new Date().toISOString()
       }, { timeout: 5000 });
     } catch (err) {

@@ -33,7 +33,8 @@ const heartbeatSchema = z.object({
         jobs_in_queue: z.number().int().nonnegative().optional()
     })).optional(),
     jobs: z.any().optional(),
-    ip_address: z.string().optional()
+    ip_address: z.string().optional(),
+    client_version: z.string().optional()
 });
 
 // Derive the real client IP from the TCP connection. Normalizes the
@@ -240,6 +241,7 @@ export async function setupClientsRoutes(fastify: FastifyInstance) {
         // Connection IP can be a router/NAT address when node is on a different subnet.
         const reportedIp = (body as any).ip_address || null;
         const connIp = getConnectionIp(request);
+        const reportedVersion = (body as any).client_version || (body as any).version || null;
         const updateFields: any = {
             is_online: status === 'online',
             last_seen: new Date(),
@@ -250,6 +252,10 @@ export async function setupClientsRoutes(fastify: FastifyInstance) {
         } else if (isUsableIp(connIp)) {
             // Fallback: trust connection IP only if agent didn't send one
             updateFields.ip_address = connIp;
+        }
+        // Sync agent version from heartbeat so dashboard shows live version
+        if (reportedVersion) {
+            updateFields.client_version = reportedVersion;
         }
 
         await fastify.knex('clients')
