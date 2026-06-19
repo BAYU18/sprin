@@ -387,7 +387,9 @@ export default function JobsPage() {
               <span style={{ marginLeft: 'auto', fontSize: 10, color: 'var(--text-muted)' }}>▾</span>
             </div>
             {nodeDropdownOpen && dropdownPos && createPortal(
-              <div style={{
+              <div
+                onMouseDown={(e) => e.stopPropagation()}
+                style={{
                 position: 'fixed', top: dropdownPos.top, left: dropdownPos.left,
                 width: dropdownPos.width, zIndex: 9999,
                 background: 'var(--bg-card)', border: '1px solid var(--accent-cyan)',

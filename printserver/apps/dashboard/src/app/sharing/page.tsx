@@ -19,6 +19,7 @@ interface Printer {
   status: string;
   raw_port: number | null;
   driver: string;
+  driver_name?: string | null;
   type: string;
   tags: string[];
   node_hostname: string;
@@ -29,6 +30,35 @@ interface Printer {
   has_bat: boolean;
   slug?: string;
   is_node_only?: boolean;
+  driver_match?: {
+    expected_driver: string | null;
+    expected_driver_id?: number;
+    score: number;
+    confidence: 'high' | 'medium' | 'low' | null;
+    matched: boolean;
+    reasons: string[];
+  } | null;
+}
+
+interface AutoDetectDetail {
+  printer_id: number;
+  printer_name: string;
+  matched: boolean;
+  driver_id?: number;
+  driver_name?: string;
+  score?: number;
+  confidence?: 'high' | 'medium' | 'low';
+  changed?: boolean;
+  reasons?: string[];
+}
+
+interface AutoDetectResult {
+  ok: boolean;
+  applied: number;
+  matched: number;
+  unmatched: number;
+  message: string;
+  details: AutoDetectDetail[];
 }
 
 interface Stats {
@@ -64,6 +94,8 @@ export default function SharingPage() {
   const [copiedIp, setCopiedIp] = useState<string | null>(null);
   const [pollProgress, setPollProgress] = useState(0);
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
+  const [autoDetecting, setAutoDetecting] = useState(false);
+  const [autoDetectResult, setAutoDetectResult] = useState<AutoDetectResult | null>(null);
 
   useEffect(() => {
     const saved = localStorage.getItem('ps-theme');
@@ -201,6 +233,70 @@ export default function SharingPage() {
     setTimeout(() => setCopiedIp(null), 1500);
   };
 
+  // Smart driver auto-detect: previews matches (dry-run), then applies if
+  // any changes are found. Re-evaluates all printers (including already-assigned).
+  // Uses the public /api/sharing/auto-detect endpoint (no JWT required).
+  const handleAutoDetect = async () => {
+    setAutoDetecting(true);
+    setAutoDetectResult(null);
+    try {
+      // 1) Dry-run to compute matches without writing.
+      const previewRes = await fetch(`${API_URL}/api/sharing/auto-detect`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dry_run: true, reassign: true }),
+      });
+      if (!previewRes.ok) throw new Error(`HTTP ${previewRes.status}`);
+      const preview = await previewRes.json();
+      const toChange = (preview.results || []).filter((r: AutoDetectDetail) => r.matched && r.changed);
+
+      if (toChange.length === 0) {
+        const matched = preview.matched || 0;
+        setAutoDetectResult({
+          ok: true,
+          applied: 0,
+          matched,
+          unmatched: preview.unmatched || 0,
+          message: matched > 0
+            ? `All ${matched} matched printer(s) already have the correct driver.`
+            : 'No confident driver matches found.',
+          details: [],
+        });
+        return;
+      }
+
+      // 2) Apply for real.
+      const applyRes = await fetch(`${API_URL}/api/sharing/auto-detect`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dry_run: false, reassign: true }),
+      });
+      if (!applyRes.ok) throw new Error(`HTTP ${applyRes.status}`);
+      const applied = await applyRes.json();
+      setAutoDetectResult({
+        ok: true,
+        applied: applied.assigned || 0,
+        matched: applied.matched || 0,
+        unmatched: applied.unmatched || 0,
+        details: toChange,
+        message: `Auto-assigned ${applied.assigned || 0} driver(s).`,
+      });
+      // Re-fetch the data so cards reflect the new driver assignments.
+      await fetchData();
+    } catch (err) {
+      setAutoDetectResult({
+        ok: false,
+        applied: 0,
+        matched: 0,
+        unmatched: 0,
+        details: [],
+        message: err instanceof Error ? err.message : 'Auto-detect failed. Check server logs.',
+      });
+    } finally {
+      setAutoDetecting(false);
+    }
+  };
+
   return (
     <>
     <style jsx global>{`
@@ -235,6 +331,9 @@ export default function SharingPage() {
         --text-muted: #64748b;
         --border: #e2e8f0;
       }
+    `}</style>
+    <style jsx global>{`
+      @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
     `}</style>
     <div data-theme={theme} style={{ minHeight: '100vh', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}>
       {/* Header */}
@@ -568,31 +667,97 @@ export default function SharingPage() {
                   <option value="offline">🔴 Printer Offline</option>
                 </select>
               </div>
-              {/* Row 4: Install Agent button */}
-              <a
-                href="/downloads/install-agent.bat"
-                download
-                title="Download Agent Node Installer (.bat)"
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '6px',
-                  background: 'linear-gradient(135deg, var(--accent-cyan), var(--accent-green))',
-                  color: '#000',
-                  fontWeight: '600',
-                  fontSize: '14px',
-                  padding: '12px 16px',
-                  borderRadius: '8px',
-                  textDecoration: 'none',
-                  transition: 'opacity 0.2s',
-                }}
-                onMouseEnter={(e) => (e.currentTarget.style.opacity = '0.85')}
-                onMouseLeave={(e) => (e.currentTarget.style.opacity = '1')}
-              >
-                ⬇️ Install Agent Node (.bat)
-              </a>
+              {/* Row 4: Auto-detect + Install Agent buttons */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                <button
+                  onClick={handleAutoDetect}
+                  disabled={autoDetecting}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '6px',
+                    background: 'linear-gradient(135deg, rgba(168, 85, 247, 0.2) 0%, rgba(0, 212, 255, 0.2) 100%)',
+                    color: 'var(--accent-cyan)',
+                    fontWeight: '600',
+                    fontSize: '13px',
+                    padding: '10px 12px',
+                    borderRadius: '8px',
+                    border: '1px solid var(--accent-cyan)',
+                    cursor: autoDetecting ? 'wait' : 'pointer',
+                    opacity: autoDetecting ? 0.7 : 1,
+                    transition: 'opacity 0.2s',
+                  }}
+                  title="Auto-detect printer models and match them to drivers"
+                >
+                  <span style={{ fontSize: '14px', animation: autoDetecting ? 'spin 1s linear infinite' : 'none', display: 'inline-block' }}>✨</span>
+                  {autoDetecting ? 'Detecting…' : 'Auto-detect Driver'}
+                </button>
+                <a
+                  href="/downloads/install-agent.bat"
+                  download
+                  title="Download Agent Node Installer (.bat)"
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '6px',
+                    background: 'linear-gradient(135deg, var(--accent-cyan), var(--accent-green))',
+                    color: '#000',
+                    fontWeight: '600',
+                    fontSize: '13px',
+                    padding: '10px 12px',
+                    borderRadius: '8px',
+                    textDecoration: 'none',
+                    transition: 'opacity 0.2s',
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.opacity = '0.85')}
+                  onMouseLeave={(e) => (e.currentTarget.style.opacity = '1')}
+                >
+                  ⬇️ Install Agent (.bat)
+                </a>
+              </div>
             </div>
+
+            {/* Auto-detect result banner */}
+            {autoDetectResult && (
+              <div style={{
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: '12px',
+                padding: '14px 16px',
+                marginBottom: '16px',
+                borderRadius: '10px',
+                border: `1px solid ${autoDetectResult.ok ? 'var(--accent-cyan)' : 'var(--accent-red)'}`,
+                background: autoDetectResult.ok ? 'rgba(0, 212, 255, 0.08)' : 'rgba(255, 61, 90, 0.08)',
+              }}>
+                <span style={{ fontSize: '18px', color: 'var(--accent-cyan)', flexShrink: 0, marginTop: '2px' }}>✨</span>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)', marginBottom: autoDetectResult.details?.length ? '8px' : 0 }}>
+                    {autoDetectResult.message}
+                  </div>
+                  {autoDetectResult.details?.length > 0 && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      {autoDetectResult.details.map((d) => (
+                        <div key={d.printer_id} style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                          <span style={{ color: 'var(--text-primary)' }}>{d.printer_name}</span>
+                          {' → '}
+                          <span style={{ color: 'var(--accent-green)' }}>{d.driver_name}</span>
+                          {' '}({d.confidence})
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <button
+                  onClick={() => setAutoDetectResult(null)}
+                  style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: 0, fontSize: '16px' }}
+                  title="Dismiss"
+                >
+                  ✕
+                </button>
+              </div>
+            )}
 
             {/* Results count */}
             <div style={{ marginBottom: '12px', fontSize: '13px', color: 'var(--text-muted)' }}>
@@ -624,12 +789,47 @@ export default function SharingPage() {
                 >
                   {/* Printer Header */}
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
-                    <div>
-                      <div style={{ fontSize: '15px', fontWeight: '600', marginBottom: '4px' }}>
-                        {printer.name}
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: '15px', fontWeight: '600', marginBottom: '4px', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                        <span>{printer.name}</span>
+                        {/* Driver match indicator */}
+                        {printer.driver_match && printer.type !== 'placeholder' && (
+                          <span
+                            title={
+                              printer.driver_match.matched
+                                ? `Driver match (${printer.driver_match.confidence}, ${Math.round((printer.driver_match.score || 0) * 100)}%): ${printer.driver_match.expected_driver || ''}`
+                                : printer.driver_match.expected_driver
+                                  ? `Mismatch — expected: ${printer.driver_match.expected_driver} (${printer.driver_match.confidence}, ${Math.round((printer.driver_match.score || 0) * 100)}%)`
+                                  : 'No confident driver match found in catalog'
+                            }
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              width: '20px',
+                              height: '20px',
+                              borderRadius: '50%',
+                              fontSize: '12px',
+                              fontWeight: 700,
+                              flexShrink: 0,
+                              color: printer.driver_match.matched ? 'var(--accent-green)' : 'var(--accent-red)',
+                              background: printer.driver_match.matched ? 'rgba(0, 255, 136, 0.15)' : 'rgba(255, 61, 90, 0.15)',
+                              border: `1px solid ${printer.driver_match.matched ? 'var(--accent-green)' : 'var(--accent-red)'}`,
+                            }}
+                          >
+                            {printer.driver_match.matched ? '✓' : '✕'}
+                          </span>
+                        )}
                       </div>
                       <div style={{ fontSize: '12px', color: printer.type === 'placeholder' ? 'var(--accent-amber)' : 'var(--text-muted)' }}>
-                        {printer.type === 'placeholder' ? '⚠️ Node tanpa printer' : (printer.driver || 'No driver')}
+                        {printer.type === 'placeholder'
+                          ? '⚠️ Node tanpa printer'
+                          : (printer.driver_name || printer.driver || 'No driver')}
+                        {printer.driver_match && !printer.driver_match.matched && printer.driver_match.expected_driver && printer.type !== 'placeholder' && (
+                          <span style={{ color: 'var(--accent-amber)', marginLeft: '4px' }}>
+                            → {printer.driver_match.expected_driver}
+                          </span>
+                        )}
                       </div>
                     </div>
                     <div style={{
